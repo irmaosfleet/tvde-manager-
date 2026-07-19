@@ -482,6 +482,74 @@ def dashboard():
                   recent=recent, alerts=alerts, fuel_top=fuel_top, xml_recent=xml_recent, money=money)
 
 
+@app.route("/importar", methods=["GET","POST"])
+@login_required
+def importar():
+    if request.method == "POST":
+        f = request.files.get("arquivo")
+        week = request.form.get("semana","").strip()
+        if not f or not f.filename or not week:
+            flash("Selecione o CSV e informe a semana.")
+            return redirect(url_for("importar"))
+        raw = f.read().decode("utf-8-sig", errors="replace")
+        rows = list(csv.DictReader(StringIO(raw)))
+        headers = set(rows[0].keys()) if rows else set()
+        c = db()
+        if "UUID do motorista" in headers:
+            platform = "Uber"
+            qty = import_uber(c, rows, week)
+        elif "Motorista" in headers and "Ganhos brutos (total)|€" in headers:
+            platform = "Bolt"
+            qty = import_bolt(c, rows, week)
+        else:
+            c.close()
+            flash("Formato não reconhecido. Envie o CSV original da Uber ou Bolt.")
+            return redirect(url_for("importar"))
+        c.execute("INSERT INTO importacoes(plataforma,semana,arquivo,linhas,criado_em) VALUES(?,?,?,?,?)",
+                  (platform, week, f.filename, qty, datetime.now().isoformat(timespec="seconds")))
+        c.commit()
+        c.close()
+        flash(f"{platform}: {qty} motoristas importados com sucesso.")
+        return redirect(url_for("relatorios"))
+    body = """
+<div class="card"><h2>Importar relatório semanal</h2>
+<p class="muted">O sistema identifica automaticamente se o ficheiro é da Uber ou da Bolt.</p>
+<form method="post" enctype="multipart/form-data" class="grid">
+ <label>Semana<input type="week" name="semana" required></label>
+ <label class="filebox">Relatório CSV<input type="file" name="arquivo" accept=".csv,text/csv" required></label>
+ <div style="align-self:end"><button class="btn accent">Importar e processar</button></div>
+</form></div>
+<div class="card"><h2>Regras aplicadas</h2>
+<p><b>Dinheiro em mãos:</b> identificado no CSV e considerado no valor final da plataforma.</p>
+<p><b>Uber:</b> usa o campo “Pago a si” como valor final disponibilizado.</p>
+<p><b>Bolt:</b> usa “Pagamento previsto” como valor final disponibilizado.</p></div>
+"""
+    return render("Importar relatórios", body)
+
+
+@app.route("/relatorios")
+@login_required
+def relatorios():
+    c = db()
+    rows = c.execute("""SELECT r.*,m.nome motorista FROM relatorios r JOIN motoristas m ON m.id=r.motorista_id
+                        ORDER BY r.id DESC""").fetchall()
+    c.close()
+    body = """
+<div class="card"><div class="actions" style="justify-content:space-between;align-items:center">
+<div><h2>Relatórios processados</h2><span class="muted">Uber e Bolt separados por motorista.</span></div>
+<a class="btn accent" href="/importar">Nova importação</a></div>
+<table><tr><th>Semana</th><th>Motorista</th><th>Plataforma</th><th>Bruto</th><th>Dinheiro em mãos</th><th>Comissão</th><th>Portagens</th><th>Líquido</th><th></th></tr>
+{% for r in rows %}<tr><td>{{r.semana}}</td><td>{{r.motorista}}</td><td>{{r.plataforma}}</td>
+<td>{{money(r.bruto)}}</td><td>{{money(r.dinheiro_maos)}}</td><td>{{money(r.comissao)}}</td><td>{{money(r.portagens)}}</td>
+<td><b>{{money(r.liquido)}}</b></td><td><a class="btn secondary" href="/recibo/{{r.id}}">PDF</a></td></tr>{% endfor %}
+</table></div>
+"""
+    return render("Relatórios", body, rows=rows, money=money)
+
+
+
+
+
 @app.route("/motoristas", methods=["GET","POST"])
 @login_required
 def motoristas():
