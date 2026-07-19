@@ -310,7 +310,7 @@ button,.btn{border:0;border-radius:7px;background:#172033;color:white;padding:10
 </div>
 </body>
 </html>
-
+"""
 
 
 def render(title, body, **ctx):
