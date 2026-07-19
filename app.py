@@ -180,80 +180,137 @@ BASE = """
 <html lang="pt">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ title }} · Irmãos Fleet</title>
 <style>
 :root{
- --bg:#f3f6fb;--panel:#fff;--nav:#0b1220;--nav2:#131e31;
- --text:#182230;--muted:#667085;--line:#e6eaf0;--accent:#18c8d8;
- --accent2:#84f438;--danger:#d92d20;--warn:#dc6803;--ok:#079455
+ --bg:#f4f7fb;--surface:#ffffff;--sidebar:#0d1b2f;--sidebar2:#12243d;
+ --text:#172033;--muted:#667085;--line:#e4e9f0;--blue:#2477e8;
+ --green:#13a36d;--purple:#7557d9;--orange:#f2a900;--cyan:#3694b7;
+ --red:#e84566;--ok:#067647;--warn:#b54708;--bad:#b42318
 }
-*{box-sizing:border-box} body{margin:0;font-family:Inter,Arial,sans-serif;background:var(--bg);color:var(--text)}
-.shell{display:grid;grid-template-columns:260px 1fr;min-height:100vh}
-.sidebar{background:linear-gradient(180deg,var(--nav),var(--nav2));color:#fff;padding:18px;position:sticky;top:0;height:100vh}
-.brand{display:flex;align-items:center;gap:12px;margin-bottom:24px}
-.brand img{width:54px;height:54px;border-radius:14px;object-fit:cover;border:1px solid #ffffff28}
-.brand b{font-size:18px}.brand small{display:block;color:#aeb8c8;margin-top:3px}
-.menu{display:grid;gap:7px}.menu a{color:#c9d2df;text-decoration:none;padding:12px;border-radius:10px;font-weight:700}
-.menu a:hover,.menu a.active{background:#ffffff12;color:#fff}.logout{position:absolute;left:18px;right:18px;bottom:18px}
-.main{min-width:0}.top{height:72px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 24px;position:sticky;top:0;z-index:4}
-.top h1{font-size:20px;margin:0}.top .user{color:var(--muted);font-size:14px}
-.content{max-width:1280px;margin:auto;padding:24px}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;margin-bottom:18px}
-.metric-label{color:var(--muted);font-size:13px}.metric-value{font-size:28px;font-weight:800;margin-top:8px}
-h2{font-size:18px;margin:0 0 14px}.muted{color:var(--muted)}
-table{width:100%;border-collapse:collapse}th,td{padding:11px 9px;border-bottom:1px solid var(--line);text-align:left;font-size:14px}
-th{font-size:11px;text-transform:uppercase;color:var(--muted)}
-label{display:block;font-size:12px;font-weight:800;color:#344054}
-input,select{width:100%;margin-top:6px;padding:11px;border:1px solid #d0d5dd;border-radius:10px;background:#fff}
-button,.btn{border:0;border-radius:10px;background:#111827;color:#fff;padding:11px 15px;text-decoration:none;font-weight:800;cursor:pointer;display:inline-block}
-.btn.secondary{background:#475467}.btn.accent{background:linear-gradient(90deg,var(--accent),var(--accent2));color:#07111d}
-.actions{display:flex;gap:8px;flex-wrap:wrap}.ok{color:var(--ok);font-weight:800}.warn{color:var(--warn);font-weight:800}.bad{color:var(--danger);font-weight:800}
-.flash{background:#ecfdf3;border:1px solid #abefc6;padding:12px;border-radius:10px;margin-bottom:14px}
-.filebox{border:2px dashed #b9c4d1;border-radius:14px;padding:18px;background:#f8fafc}
-.mobilebar{display:none}
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,Arial,sans-serif;background:var(--bg);color:var(--text)}
+.app-shell{display:grid;grid-template-columns:245px minmax(0,1fr);min-height:100vh}
+.sidebar{background:linear-gradient(180deg,var(--sidebar),var(--sidebar2));color:white;padding:18px 14px;position:sticky;top:0;height:100vh;overflow-y:auto}
+.brand{display:flex;gap:10px;align-items:center;padding:4px 6px 20px}
+.brand img{width:42px;height:42px;border-radius:50%;object-fit:cover;border:1px solid #ffffff30}
+.brand strong{display:block;font-size:16px;letter-spacing:.3px}
+.brand small{color:#b7c2d2;font-size:11px}
+.nav-title{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#8190a6;margin:18px 10px 8px}
+.nav{display:grid;gap:5px}
+.nav a{display:flex;align-items:center;gap:10px;color:#d6dfeb;text-decoration:none;padding:11px 12px;border-radius:8px;font-weight:650;font-size:13px}
+.nav a:hover,.nav a.active{background:linear-gradient(90deg,#2276e8,#2d82ed);color:white}
+.nav .badge{margin-left:auto;background:#ff8a00;color:white;border-radius:7px;padding:2px 7px;font-size:11px}
+.version{position:sticky;top:calc(100vh - 42px);padding:16px 8px 2px;color:#9cacbf;font-size:11px}
+.main{min-width:0}
+.topbar{height:64px;background:white;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}
+.topbar-left{display:flex;align-items:center;gap:14px}
+.menu-toggle{border:0;background:transparent;font-size:22px;color:var(--text);padding:6px}
+.topbar-right{display:flex;align-items:center;gap:18px;color:var(--text);font-size:13px}
+.week-chip{border:1px solid var(--line);border-radius:8px;padding:9px 12px;background:white}
+.mobile-nav{display:none}
+.content{max-width:1450px;margin:auto;padding:22px}
+.page-head{margin-bottom:18px}
+.page-head h1{margin:0;font-size:24px}
+.page-head p{margin:5px 0 0;color:var(--muted);font-size:13px}
+.kpi-grid{display:grid;grid-template-columns:repeat(6,minmax(150px,1fr));gap:14px;margin-bottom:18px}
+.kpi{border-radius:8px;padding:17px;color:white;min-height:132px;position:relative;overflow:hidden}
+.kpi h3{margin:0;font-size:13px;font-weight:650}.kpi .value{font-size:22px;font-weight:850;margin:12px 0}
+.kpi small{display:block;color:#ffffffdc;line-height:1.7}.kpi .icon{position:absolute;right:16px;top:45px;font-size:30px;opacity:.75}
+.kpi.green{background:linear-gradient(135deg,#0d9b64,#17b277)}
+.kpi.blue{background:linear-gradient(135deg,#176cda,#2c83ed)}
+.kpi.purple{background:linear-gradient(135deg,#674cd3,#7d60e3)}
+.kpi.orange{background:linear-gradient(135deg,#eda900,#ffb800)}
+.kpi.cyan{background:linear-gradient(135deg,#2b83a8,#3da0c3)}
+.kpi.red{background:linear-gradient(135deg,#df3d5f,#f04d6c)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+.dashboard-grid{display:grid;grid-template-columns:1.2fr 1fr .8fr;gap:14px;margin-bottom:14px}
+.dashboard-grid.bottom{grid-template-columns:1fr .9fr 1fr}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:8px;margin-bottom:14px;overflow:hidden}
+.card-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line)}
+.card-header h2,.card h2{font-size:14px;margin:0}
+.card-body{padding:15px}
+.card > h2{padding:15px 16px;border-bottom:1px solid var(--line)}
+.metric-label{font-size:12px;color:var(--muted)}.metric-value{font-size:26px;font-weight:850;margin-top:7px}
+.muted{color:var(--muted)}
+table{width:100%;border-collapse:collapse}th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;font-size:12px}
+th{font-size:10px;text-transform:uppercase;color:var(--muted);background:#fbfcfe}
+label{display:block;font-size:12px;font-weight:750;color:#344054}
+input,select{width:100%;padding:10px;border:1px solid #cfd6e1;border-radius:7px;background:white;margin-top:6px}
+button,.btn{border:0;border-radius:7px;background:#172033;color:white;padding:10px 14px;text-decoration:none;display:inline-block;font-weight:750;cursor:pointer;font-size:12px}
+.btn.primary{background:#2477e8}.btn.green{background:#12a36d}.btn.purple{background:#7557d9}.btn.orange{background:#ef7d00;color:white}
+.actions{display:flex;gap:8px;flex-wrap:wrap}
+.flash{background:#ecfdf3;border:1px solid #abefc6;padding:11px;border-radius:7px;margin-bottom:14px}
+.ok{color:var(--ok);font-weight:750}.warn{color:var(--warn);font-weight:750}.bad{color:var(--bad);font-weight:750}
+.status{display:inline-block;padding:3px 7px;border-radius:999px;font-size:10px;font-weight:750}
+.status.ok{background:#e8f7ef;color:#067647}.status.warn{background:#fff1df;color:#b54708}.status.bad{background:#fff0f1;color:#b42318}
+.filebox{border:2px dashed #c6cfdb;border-radius:8px;padding:14px;background:#fafcff}
+.progress{height:8px;background:#edf1f6;border-radius:999px;overflow:hidden}.progress span{display:block;height:100%;background:#2477e8}
+.quick-actions{background:linear-gradient(90deg,#eef6ff,#f8fbff);border:1px solid #cfe0f4;border-radius:8px;padding:14px;display:flex;gap:10px;flex-wrap:wrap}
+@media(max-width:1180px){.kpi-grid{grid-template-columns:repeat(3,1fr)}.dashboard-grid,.dashboard-grid.bottom{grid-template-columns:1fr}}
 @media(max-width:820px){
- .shell{display:block}.sidebar{display:none}.top{padding:0 14px}.content{padding:14px}
- .mobilebar{display:flex;overflow-x:auto;gap:8px;background:#0b1220;padding:10px;position:sticky;top:72px;z-index:3}
- .mobilebar a{white-space:nowrap;color:#dbe4ef;text-decoration:none;background:#ffffff12;padding:9px 11px;border-radius:9px;font-size:13px;font-weight:800}
+ .app-shell{display:block}.sidebar{display:none}.topbar{padding:0 12px}.week-chip{display:none}
+ .mobile-nav{display:flex;gap:7px;overflow-x:auto;padding:9px;background:#0d1b2f;position:sticky;top:64px;z-index:9}
+ .mobile-nav a{white-space:nowrap;color:white;text-decoration:none;background:#ffffff13;padding:8px 10px;border-radius:7px;font-size:12px}
+ .content{padding:13px}.kpi-grid{grid-template-columns:repeat(2,1fr)}
  table{display:block;overflow-x:auto;white-space:nowrap}
 }
+@media(max-width:520px){.kpi-grid{grid-template-columns:1fr}.topbar-right{gap:8px}}
 </style>
 </head>
 <body>
-<div class="shell">
+<div class="app-shell">
 <aside class="sidebar">
- <div class="brand"><img src="/static/logo.png"><div><b>Irmãos Fleet</b><small>Gestão TVDE</small></div></div>
- <nav class="menu">
-  <a href="/">▦ Dashboard</a>
-  <a href="/importar">⇧ Importar relatórios</a>
-  <a href="/relatorios">€ Relatórios</a>
-  <a href="/motoristas">● Motoristas</a>
+ <div class="brand">
+  <img src="/static/logo.png" onerror="this.style.display='none'">
+  <div><strong>IRMÃOS FLEET</strong><small>Sistema de Gestão TVDE</small></div>
+ </div>
+ <div class="nav">
+  <a href="/">⌂ Dashboard</a>
+  <a href="/motoristas">♙ Motoristas</a>
   <a href="/viaturas">▣ Viaturas</a>
-  <a href="/recibos">▤ Recibos</a>
-  <a href="/combustivel">⛽ Combustível</a>
+ </div>
+ <div class="nav-title">Importações</div>
+ <div class="nav">
+  <a href="/importar">⇧ Uber e Bolt</a>
+  <a href="/combustivel">⛽ Combustível PRIO</a>
+ </div>
+ <div class="nav-title">Financeiro</div>
+ <div class="nav">
+  <a href="/relatorios">▤ Relatórios</a>
   <a href="/pagamentos">⇄ Pagamentos XML</a>
- </nav>
- <div class="logout"><a class="btn secondary" style="width:100%;text-align:center" href="/logout">Sair</a></div>
+  <a href="/recibos">▧ Recibos</a>
+ </div>
+ <div class="nav-title">Pendências</div>
+ <div class="nav">
+  <a href="/sem-iban">! Sem IBAN <span class="badge">!</span></a>
+ </div>
+ <div class="nav-title">Conta</div>
+ <div class="nav"><a href="/logout">↗ Sair</a></div>
+ <div class="version">Versão 1.3</div>
 </aside>
 <section class="main">
- <header class="top"><h1>{{ title }}</h1><div class="user">Administrador · Irmãos Fleet</div></header>
- <nav class="mobilebar">
-  <a href="/">Dashboard</a><a href="/importar">Importar</a><a href="/relatorios">Relatórios</a>
-  <a href="/motoristas">Motoristas</a><a href="/viaturas">Viaturas</a><a href="/recibos">Recibos</a><a href="/combustivel">Combustível</a><a href="/pagamentos">XML</a><a href="/logout">Sair</a>
+ <header class="topbar">
+  <div class="topbar-left"><button class="menu-toggle">☰</button></div>
+  <div class="topbar-right"><div class="week-chip">📅 Semana atual</div><div>Olá, {{ session.get('username','Admin') }}</div></div>
+ </header>
+ <nav class="mobile-nav">
+  <a href="/">Dashboard</a><a href="/motoristas">Motoristas</a><a href="/viaturas">Viaturas</a>
+  <a href="/importar">Importar</a><a href="/combustivel">PRIO</a><a href="/pagamentos">XML</a><a href="/sem-iban">Sem IBAN</a>
  </nav>
  <main class="content">
- {% with messages = get_flashed_messages() %}
- {% for m in messages %}<div class="flash">{{m}}</div>{% endfor %}
- {% endwith %}
- {{ body|safe }}
+  <div class="page-head"><h1>{{ title }}</h1><p>Visão geral da operação</p></div>
+  {% with messages = get_flashed_messages() %}
+  {% for m in messages %}<div class="flash">{{m}}</div>{% endfor %}
+  {% endwith %}
+  {{ body|safe }}
  </main>
 </section>
 </div>
 </body>
 </html>
-"""
+
 
 
 def render(title, body, **ctx):
@@ -307,12 +364,18 @@ def dashboard():
         "motoristas": c.execute("SELECT COUNT(*) n FROM motoristas WHERE ativo=1").fetchone()["n"],
         "viaturas": c.execute("SELECT COUNT(*) n FROM viaturas").fetchone()["n"],
     }
-    totals = c.execute("""SELECT COALESCE(SUM(bruto),0) bruto, COALESCE(SUM(dinheiro_maos),0) dinheiro,
-                         COALESCE(SUM(liquido),0) liquido FROM relatorios""").fetchone()
+    totals = c.execute("""SELECT COALESCE(SUM(bruto),0) bruto,
+                         COALESCE(SUM(comissao),0) comissao,
+                         COALESCE(SUM(dinheiro_maos),0) dinheiro,
+                         COALESCE(SUM(liquido),0) liquido
+                         FROM relatorios""").fetchone()
     fuel_total = c.execute("SELECT COALESCE(SUM(total),0) total FROM combustivel").fetchone()["total"]
+    fuel_count = c.execute("SELECT COUNT(*) n FROM combustivel").fetchone()["n"]
     fuel_pending = c.execute("SELECT COUNT(*) n FROM combustivel WHERE motorista_id IS NULL").fetchone()["n"]
-    recent = c.execute("""SELECT r.*,m.nome motorista FROM relatorios r JOIN motoristas m ON m.id=r.motorista_id
-                          ORDER BY r.id DESC LIMIT 8""").fetchall()
+    no_iban = c.execute("SELECT COUNT(*) n FROM motoristas WHERE TRIM(COALESCE(iban,''))=''").fetchone()["n"]
+    recent = c.execute("""SELECT r.*,m.nome motorista FROM relatorios r
+                          JOIN motoristas m ON m.id=r.motorista_id
+                          ORDER BY r.id DESC LIMIT 6""").fetchall()
     alerts = []
     today = date.today()
     for v in c.execute("SELECT * FROM viaturas ORDER BY matricula").fetchall():
@@ -320,160 +383,103 @@ def dashboard():
             if v[field]:
                 try:
                     days = (datetime.strptime(v[field], "%Y-%m-%d").date() - today).days
-                    if days <= 10:
+                    if days <= 20:
                         alerts.append((v["matricula"], label, days))
                 except ValueError:
                     pass
+    fuel_top = c.execute("""SELECT m.nome motorista,m.cartao_prio,COUNT(f.id) abastecimentos,
+                            COALESCE(SUM(f.litros),0) litros,COALESCE(SUM(f.total),0) total
+                            FROM combustivel f JOIN motoristas m ON m.id=f.motorista_id
+                            GROUP BY m.id ORDER BY total DESC LIMIT 5""").fetchall()
+    xml_recent = c.execute("""SELECT * FROM xml_historico ORDER BY id DESC LIMIT 3""").fetchall()
     c.close()
+
     body = """
-<div class="grid">
- <div class="card"><div class="metric-label">Motoristas ativos</div><div class="metric-value">{{counts.motoristas}}</div></div>
- <div class="card"><div class="metric-label">Viaturas</div><div class="metric-value">{{counts.viaturas}}</div></div>
- <div class="card"><div class="metric-label">Total bruto importado</div><div class="metric-value">{{money(totals.bruto)}}</div></div>
- <div class="card"><div class="metric-label">Dinheiro em mãos</div><div class="metric-value">{{money(totals.dinheiro)}}</div></div>
- <div class="card"><div class="metric-label">Total líquido</div><div class="metric-value">{{money(totals.liquido)}}</div></div>
- <div class="card"><div class="metric-label">Combustível</div><div class="metric-value">{{money(fuel_total)}}</div><div class="muted">{{fuel_pending}} pendência(s)</div></div>
+<div class="kpi-grid">
+ <div class="kpi green"><h3>Faturamento Bruto</h3><div class="value">{{money(totals.bruto)}}</div><small>Operação acumulada</small><div class="icon">▥</div></div>
+ <div class="kpi blue"><h3>Comissões</h3><div class="value">{{money(totals.comissao)}}</div><small>Comissão processada</small><div class="icon">%</div></div>
+ <div class="kpi purple"><h3>Combustível (PRIO)</h3><div class="value">{{money(fuel_total)}}</div><small>Abastecimentos: {{fuel_count}}</small><div class="icon">⛽</div></div>
+ <div class="kpi orange"><h3>Valor a Pagar</h3><div class="value">{{money(totals.liquido)}}</div><small>Pagamento previsto</small><div class="icon">♟</div></div>
+ <div class="kpi cyan"><h3>Sem IBAN</h3><div class="value">{{no_iban}}</div><small>Aguardando cadastro</small><div class="icon">⚠</div></div>
+ <div class="kpi red"><h3>Pendências</h3><div class="value">{{alerts|length + fuel_pending}}</div><small>Verifique antes do fechamento</small><div class="icon">!</div></div>
 </div>
-<div class="grid" style="grid-template-columns:1.4fr 1fr">
- <section class="card"><h2>Relatórios recentes</h2>
- <table><tr><th>Motorista</th><th>Plataforma</th><th>Semana</th><th>Líquido</th></tr>
- {% for r in recent %}<tr><td>{{r.motorista}}</td><td>{{r.plataforma}}</td><td>{{r.semana}}</td><td><b>{{money(r.liquido)}}</b></td></tr>{% endfor %}
- </table></section>
- <section class="card"><h2>Alertas</h2>
- {% if alerts %}<table><tr><th>Matrícula</th><th>Documento</th><th>Estado</th></tr>
- {% for a in alerts %}<tr><td>{{a[0]}}</td><td>{{a[1]}}</td><td class="{{'bad' if a[2]<0 else 'warn'}}">{{'Vencido' if a[2]<0 else 'Vence em '~a[2]~' dias'}}</td></tr>{% endfor %}</table>
- {% else %}<p class="muted">Nenhum documento vencendo em 10 dias.</p>{% endif %}</section>
+
+<div class="dashboard-grid">
+ <section class="card">
+  <div class="card-header"><h2>Importações da Semana</h2></div>
+  <div class="card-body">
+   <table><tr><th>Origem</th><th>Status</th><th>Detalhes</th></tr>
+    <tr><td>Uber</td><td><span class="status ok">Importado</span></td><td>Relatórios disponíveis</td></tr>
+    <tr><td>Bolt</td><td><span class="status ok">Importado</span></td><td>Relatórios disponíveis</td></tr>
+    <tr><td>Combustível PRIO</td><td><span class="status {{'warn' if fuel_pending else 'ok'}}">{{'Pendências' if fuel_pending else 'Importado'}}</span></td><td>{{fuel_pending}} cartão(ões) não identificado(s)</td></tr>
+   </table>
+  </div>
+ </section>
+ <section class="card">
+  <div class="card-header"><h2>Resumo de Pagamentos</h2></div>
+  <div class="card-body">
+   <div style="text-align:center;padding:20px 10px">
+    <div style="font-size:12px;color:var(--muted)">Total previsto</div>
+    <div style="font-size:30px;font-weight:850;margin:8px 0">{{money(totals.liquido)}}</div>
+    <div class="progress"><span style="width:{{ 100 if not no_iban else 80 }}%"></span></div>
+    <div style="margin-top:12px;font-size:12px;color:var(--muted)">Com IBAN: {{counts.motoristas-no_iban}} · Sem IBAN: {{no_iban}}</div>
+   </div>
+  </div>
+ </section>
+ <section class="card">
+  <div class="card-header"><h2>Estatísticas Rápidas</h2></div>
+  <div class="card-body">
+   <table>
+    <tr><td>Total de Motoristas</td><td><b>{{counts.motoristas}}</b></td></tr>
+    <tr><td>Viaturas</td><td><b>{{counts.viaturas}}</b></td></tr>
+    <tr><td>Relatórios Recentes</td><td><b>{{recent|length}}</b></td></tr>
+    <tr><td>Abastecimentos</td><td><b>{{fuel_count}}</b></td></tr>
+    <tr><td>Sem IBAN</td><td><b>{{no_iban}}</b></td></tr>
+   </table>
+  </div>
+ </section>
+</div>
+
+<div class="dashboard-grid bottom">
+ <section class="card">
+  <div class="card-header"><h2>Top 5 — Combustível por Motorista</h2></div>
+  <div class="card-body">
+   <table><tr><th>#</th><th>Motorista</th><th>Cartão</th><th>Total</th><th>Litros</th></tr>
+   {% for r in fuel_top %}<tr><td>{{loop.index}}</td><td>{{r.motorista}}</td><td>{{r.cartao_prio}}</td><td><b>{{money(r.total)}}</b></td><td>{{"%.2f"|format(r.litros or 0)}}</td></tr>{% endfor %}
+   </table>
+  </div>
+ </section>
+ <section class="card">
+  <div class="card-header"><h2>Pendências</h2></div>
+  <div class="card-body">
+   <table>
+    <tr><td>Sem IBAN</td><td><span class="status warn">{{no_iban}}</span></td></tr>
+    <tr><td>Documentos vencendo</td><td><span class="status {{'bad' if alerts else 'ok'}}">{{alerts|length}}</span></td></tr>
+    <tr><td>Cartões PRIO não encontrados</td><td><span class="status {{'warn' if fuel_pending else 'ok'}}">{{fuel_pending}}</span></td></tr>
+   </table>
+   <div style="margin-top:14px"><a class="btn primary" href="/sem-iban">Ver pendências</a></div>
+  </div>
+ </section>
+ <section class="card">
+  <div class="card-header"><h2>Últimos XMLs Gerados</h2></div>
+  <div class="card-body">
+   <table><tr><th>Semana</th><th>Arquivo</th><th>Total</th></tr>
+   {% for x in xml_recent %}<tr><td>{{x.semana}}</td><td>{{x.arquivo}}</td><td><b>{{money(x.total)}}</b></td></tr>{% endfor %}
+   </table>
+  </div>
+ </section>
+</div>
+
+<div class="quick-actions">
+ <a class="btn primary" href="/importar">⇧ Importar Uber/Bolt</a>
+ <a class="btn green" href="/combustivel">⛽ Importar PRIO</a>
+ <a class="btn purple" href="/pagamentos">⇄ Simular Pagamentos</a>
+ <a class="btn orange" href="/relatorios">▤ Ver Relatórios</a>
 </div>
 """
-    return render("Dashboard", body, counts=counts, totals=totals, recent=recent, alerts=alerts, money=money, fuel_total=fuel_total, fuel_pending=fuel_pending)
-
-
-def get_or_create_driver(c, name, email="", phone=""):
-    name = " ".join(str(name or "").split()).strip()
-    if not name:
-        return None
-    found = c.execute("SELECT id FROM motoristas WHERE lower(nome)=lower(?)", (name,)).fetchone()
-    if found:
-        return found["id"]
-    cur = c.execute("INSERT INTO motoristas(nome,email,telefone) VALUES(?,?,?)", (name, email, phone))
-    return cur.lastrowid
-
-
-def import_uber(c, rows, week):
-    count = 0
-    for row in rows:
-        first = row.get("Nome próprio do motorista", "")
-        last = row.get("Apelido do motorista", "")
-        name = " ".join((first + " " + last).split())
-        if not name:
-            continue
-        driver_id = get_or_create_driver(c, name)
-        bruto = num(row.get("Pago a si : Os seus rendimentos : Tarifa"))
-        dinheiro = abs(num(row.get("Pago a si : Saldo da viagem : Pagamentos : Dinheiro recebido")))
-        service = abs(num(row.get("Pago a si:Os seus rendimentos:Taxa de serviço")))
-        tolls = abs(num(row.get("Pago a si:Saldo da viagem:Reembolsos:Portagem")))
-        paid = num(row.get("Pago a si"))
-        earnings = num(row.get("Pago a si : Os seus rendimentos"))
-        liquid = paid if paid else earnings - dinheiro
-        c.execute("""INSERT INTO relatorios(plataforma,motorista_id,semana,bruto,dinheiro_maos,comissao,
-                   portagens,outros_descontos,reembolsos,liquido,criado_em)
-                   VALUES('Uber',?,?,?,?,?,?,?,?,?,?)""",
-                  (driver_id, week, bruto, dinheiro, service, tolls, 0, tolls, liquid,
-                   datetime.now().isoformat(timespec="seconds")))
-        c.execute("UPDATE relatorios SET grupo='TVDE' WHERE id=last_insert_rowid()")
-        count += 1
-    return count
-
-
-def import_bolt(c, rows, week):
-    count = 0
-    for row in rows:
-        name = row.get("Motorista", "")
-        if not name:
-            continue
-        driver_id = get_or_create_driver(c, name, row.get("Email",""), row.get("Telemóvel",""))
-        bruto = num(row.get("Ganhos brutos (total)|€"))
-        dinheiro = abs(num(row.get("Dinheiro recebido|€")))
-        commission = abs(num(row.get("Comissões|€")))
-        tolls = abs(num(row.get("Portagens|€")))
-        other = abs(num(row.get("Outras taxas|€"))) + abs(num(row.get("Reembolsos aos passageiros|€")))
-        reimburse = abs(num(row.get("Reembolsos de despesas|€")))
-        predicted = num(row.get("Pagamento previsto|€"))
-        liquid = predicted if predicted else num(row.get("Ganhos líquidos|€")) - dinheiro
-        c.execute("""INSERT INTO relatorios(plataforma,motorista_id,semana,bruto,dinheiro_maos,comissao,
-                   portagens,outros_descontos,reembolsos,liquido,criado_em)
-                   VALUES('Bolt',?,?,?,?,?,?,?,?,?,?)""",
-                  (driver_id, week, bruto, dinheiro, commission, tolls, other, reimburse, liquid,
-                   datetime.now().isoformat(timespec="seconds")))
-        c.execute("UPDATE relatorios SET grupo='TVDE' WHERE id=last_insert_rowid()")
-        count += 1
-    return count
-
-
-@app.route("/importar", methods=["GET","POST"])
-@login_required
-def importar():
-    if request.method == "POST":
-        f = request.files.get("arquivo")
-        week = request.form.get("semana","").strip()
-        if not f or not f.filename or not week:
-            flash("Selecione o CSV e informe a semana.")
-            return redirect(url_for("importar"))
-        raw = f.read().decode("utf-8-sig", errors="replace")
-        rows = list(csv.DictReader(StringIO(raw)))
-        headers = set(rows[0].keys()) if rows else set()
-        c = db()
-        if "UUID do motorista" in headers:
-            platform = "Uber"
-            qty = import_uber(c, rows, week)
-        elif "Motorista" in headers and "Ganhos brutos (total)|€" in headers:
-            platform = "Bolt"
-            qty = import_bolt(c, rows, week)
-        else:
-            c.close()
-            flash("Formato não reconhecido. Envie o CSV original da Uber ou Bolt.")
-            return redirect(url_for("importar"))
-        c.execute("INSERT INTO importacoes(plataforma,semana,arquivo,linhas,criado_em) VALUES(?,?,?,?,?)",
-                  (platform, week, f.filename, qty, datetime.now().isoformat(timespec="seconds")))
-        c.commit()
-        c.close()
-        flash(f"{platform}: {qty} motoristas importados com sucesso.")
-        return redirect(url_for("relatorios"))
-    body = """
-<div class="card"><h2>Importar relatório semanal</h2>
-<p class="muted">O sistema identifica automaticamente se o ficheiro é da Uber ou da Bolt.</p>
-<form method="post" enctype="multipart/form-data" class="grid">
- <label>Semana<input type="week" name="semana" required></label>
- <label class="filebox">Relatório CSV<input type="file" name="arquivo" accept=".csv,text/csv" required></label>
- <div style="align-self:end"><button class="btn accent">Importar e processar</button></div>
-</form></div>
-<div class="card"><h2>Regras aplicadas</h2>
-<p><b>Dinheiro em mãos:</b> identificado no CSV e considerado no valor final da plataforma.</p>
-<p><b>Uber:</b> usa o campo “Pago a si” como valor final disponibilizado.</p>
-<p><b>Bolt:</b> usa “Pagamento previsto” como valor final disponibilizado.</p></div>
-"""
-    return render("Importar relatórios", body)
-
-
-@app.route("/relatorios")
-@login_required
-def relatorios():
-    c = db()
-    rows = c.execute("""SELECT r.*,m.nome motorista FROM relatorios r JOIN motoristas m ON m.id=r.motorista_id
-                        ORDER BY r.id DESC""").fetchall()
-    c.close()
-    body = """
-<div class="card"><div class="actions" style="justify-content:space-between;align-items:center">
-<div><h2>Relatórios processados</h2><span class="muted">Uber e Bolt separados por motorista.</span></div>
-<a class="btn accent" href="/importar">Nova importação</a></div>
-<table><tr><th>Semana</th><th>Motorista</th><th>Plataforma</th><th>Bruto</th><th>Dinheiro em mãos</th><th>Comissão</th><th>Portagens</th><th>Líquido</th><th></th></tr>
-{% for r in rows %}<tr><td>{{r.semana}}</td><td>{{r.motorista}}</td><td>{{r.plataforma}}</td>
-<td>{{money(r.bruto)}}</td><td>{{money(r.dinheiro_maos)}}</td><td>{{money(r.comissao)}}</td><td>{{money(r.portagens)}}</td>
-<td><b>{{money(r.liquido)}}</b></td><td><a class="btn secondary" href="/recibo/{{r.id}}">PDF</a></td></tr>{% endfor %}
-</table></div>
-"""
-    return render("Relatórios", body, rows=rows, money=money)
-
+    return render("Dashboard", body, counts=counts, totals=totals, fuel_total=fuel_total,
+                  fuel_count=fuel_count, fuel_pending=fuel_pending, no_iban=no_iban,
+                  recent=recent, alerts=alerts, fuel_top=fuel_top, xml_recent=xml_recent, money=money)
 
 
 @app.route("/motoristas", methods=["GET","POST"])
@@ -677,6 +683,148 @@ def combustivel():
 """
     return render("Combustível", body, summary=summary, by_driver=by_driver, pending_rows=pending_rows, money=money)
 
+
+
+
+@app.route("/sem-iban", methods=["GET", "POST"])
+@login_required
+def sem_iban():
+    c = db()
+
+    if request.method == "POST":
+        driver_id = request.form.get("motorista_id")
+        iban = iban_clean(request.form.get("iban", ""))
+        email = request.form.get("email", "").strip()
+        telefone = request.form.get("telefone", "").strip()
+
+        if not driver_id:
+            c.close()
+            flash("Motorista não identificado.")
+            return redirect(url_for("sem_iban"))
+
+        if not iban:
+            c.close()
+            flash("Informe o IBAN.")
+            return redirect(url_for("sem_iban"))
+
+        if not iban_valid(iban):
+            c.close()
+            flash("O IBAN informado não é válido.")
+            return redirect(url_for("sem_iban"))
+
+        duplicate = c.execute(
+            "SELECT id,nome FROM motoristas WHERE iban=? AND id<>?",
+            (iban, driver_id)
+        ).fetchone()
+
+        if duplicate:
+            c.close()
+            flash(f"Este IBAN já está cadastrado para {duplicate['nome']}. Confira antes de continuar.")
+            return redirect(url_for("sem_iban"))
+
+        c.execute(
+            "UPDATE motoristas SET iban=?,email=?,telefone=? WHERE id=?",
+            (iban, email, telefone, driver_id)
+        )
+        c.commit()
+        c.close()
+        flash("IBAN cadastrado. O motorista já pode entrar na próxima simulação de pagamento.")
+        return redirect(url_for("sem_iban"))
+
+    rows = c.execute("""
+        SELECT
+            m.id,m.nome,m.email,m.telefone,m.iban,
+            COALESCE(SUM(r.liquido),0) valor_pendente,
+            COUNT(r.id) quantidade_relatorios,
+            MAX(r.semana) ultima_semana
+        FROM motoristas m
+        LEFT JOIN relatorios r ON r.motorista_id=m.id
+        WHERE TRIM(COALESCE(m.iban,''))=''
+        GROUP BY m.id,m.nome,m.email,m.telefone,m.iban
+        ORDER BY valor_pendente DESC,m.nome
+    """).fetchall()
+
+    invalid_rows = c.execute("""
+        SELECT id,nome,email,telefone,iban
+        FROM motoristas
+        WHERE TRIM(COALESCE(iban,''))<>''
+        ORDER BY nome
+    """).fetchall()
+
+    invalid_rows = [r for r in invalid_rows if not iban_valid(r["iban"])]
+    c.close()
+
+    body = """
+<div class="grid">
+  <div class="card">
+    <div class="metric-label">Pessoas sem IBAN</div>
+    <div class="metric-value">{{rows|length}}</div>
+  </div>
+  <div class="card">
+    <div class="metric-label">IBAN inválido</div>
+    <div class="metric-value">{{invalid_rows|length}}</div>
+  </div>
+</div>
+
+<div class="card">
+<h2>Cadastro rápido de IBAN</h2>
+<p class="muted">
+Todos os motoristas importados da Uber ou Bolt sem IBAN aparecem automaticamente aqui.
+Ao salvar um IBAN válido, a pessoa deixa esta lista e passa a entrar na simulação de pagamentos.
+</p>
+
+{% if rows %}
+{% for r in rows %}
+<form method="post" class="grid" style="border-bottom:1px solid var(--line);padding:14px 0">
+  <input type="hidden" name="motorista_id" value="{{r.id}}">
+  <div>
+    <label>Motorista</label>
+    <div style="margin-top:8px"><b>{{r.nome}}</b></div>
+    <div class="muted">{{r.quantidade_relatorios}} relatório(s) · {{r.ultima_semana or 'sem semana'}}</div>
+  </div>
+  <div>
+    <label>Valor pendente</label>
+    <div style="margin-top:8px;font-weight:800">{{money(r.valor_pendente)}}</div>
+  </div>
+  <label>IBAN
+    <input name="iban" placeholder="PT50..." required>
+  </label>
+  <label>E-mail
+    <input name="email" type="email" value="{{r.email or ''}}">
+  </label>
+  <label>Telefone
+    <input name="telefone" value="{{r.telefone or ''}}">
+  </label>
+  <div style="align-self:end">
+    <button class="btn accent">Salvar e liberar pagamento</button>
+  </div>
+</form>
+{% endfor %}
+{% else %}
+<p class="ok">Não há motoristas sem IBAN.</p>
+{% endif %}
+</div>
+
+<div class="card">
+<h2>IBAN inválido</h2>
+{% if invalid_rows %}
+<table>
+<tr><th>Motorista</th><th>IBAN atual</th><th>Contato</th></tr>
+{% for r in invalid_rows %}
+<tr>
+  <td class="bad">{{r.nome}}</td>
+  <td>{{r.iban}}</td>
+  <td>{{r.email}}<br>{{r.telefone}}</td>
+</tr>
+{% endfor %}
+</table>
+<p class="muted">Corrija estes IBANs no cadastro do motorista ou remova-os para que voltem à lista Sem IBAN.</p>
+{% else %}
+<p class="ok">Nenhum IBAN inválido cadastrado.</p>
+{% endif %}
+</div>
+"""
+    return render("Sem IBAN", body, rows=rows, invalid_rows=invalid_rows, money=money)
 
 
 def iban_clean(value):
@@ -935,7 +1083,7 @@ def pagamentos():
 <label>Grupo<select name="grupo"><option value="TVDE" {{'selected' if group=='TVDE' else ''}}>TVDE</option><option value="DELIVERY" {{'selected' if group=='DELIVERY' else ''}}>Uber Eats / Bolt Food</option></select></label>
 <label>Taxa por transferência<input type="number" step="0.01" name="taxa" value="{{bank_fee}}"></label>
 <label>Dividir inicialmente em<input type="number" min="1" name="partes" value="{{parts}}"></label>
-<div style="align-self:end"><button>Simular pagamentos</button></div>
+<div style="align-self:end"><button>Simular e preparar XML</button></div>
 </form></div>
 
 <div class="card"><h2>Adicionar desconto extra</h2>
@@ -951,7 +1099,7 @@ def pagamentos():
 {% if week %}
 <div class="grid">
 <div class="card"><div class="metric-label">Transferências válidas</div><div class="metric-value">{{valid|length}}</div></div>
-<div class="card"><div class="metric-label">Sem IBAN</div><div class="metric-value">{{no_iban|length}}</div></div>
+<a href="/sem-iban" style="text-decoration:none;color:inherit"><div class="card"><div class="metric-label">Sem IBAN</div><div class="metric-value">{{no_iban|length}}</div><div class="muted">Clique para cadastrar</div></div></a>
 <div class="card"><div class="metric-label">IBAN inválido</div><div class="metric-value">{{invalid_iban|length}}</div></div>
 <div class="card"><div class="metric-label">Negativos / não pagos</div><div class="metric-value">{{negatives|length}}</div></div>
 <div class="card"><div class="metric-label">XMLs previstos</div><div class="metric-value">{{batches|length}}</div></div>
@@ -961,24 +1109,44 @@ def pagamentos():
 <table><tr><th>Parte</th><th>Transferências</th><th>Total</th></tr>
 {% for b in batches %}<tr><td>{{loop.index}}</td><td>{{b.items|length}}</td><td><b>{{money(b.total)}}</b></td></tr>{% endfor %}
 </table>
+</div>
+
+<div class="card">
+<h2>Exportar pagamentos em XML</h2>
 {% if valid %}
+<p class="muted">
+Os pagamentos válidos serão exportados. Pessoas sem IBAN, com IBAN inválido ou com valor negativo
+ficarão fora dos XMLs e continuarão listadas como pendência.
+</p>
 <form method="post" action="/gerar-xml" class="grid" style="margin-top:16px">
-<input type="hidden" name="semana" value="{{week}}"><input type="hidden" name="grupo" value="{{group}}">
-<input type="hidden" name="taxa" value="{{bank_fee}}"><input type="hidden" name="partes" value="{{parts}}">
+<input type="hidden" name="semana" value="{{week}}">
+<input type="hidden" name="grupo" value="{{group}}">
+<input type="hidden" name="taxa" value="{{bank_fee}}">
+<input type="hidden" name="partes" value="{{parts}}">
 <label>Data de execução<input type="date" name="data_execucao" required></label>
 <label>Nome da empresa pagadora<input name="debtor_name" required></label>
 <label>IBAN da empresa<input name="debtor_iban" required></label>
 <label>BIC/SWIFT<input name="debtor_bic" required></label>
-<div style="align-self:end"><button class="btn accent">Gerar XMLs em ZIP</button></div>
+{% if warnings %}
+<label style="grid-column:1/-1">
+<input type="checkbox" name="confirmar_iban_nomes" value="1" style="width:auto;margin-right:8px">
+Confirmo que revisei os IBANs associados a nomes diferentes.
+</label>
+{% endif %}
+<div style="align-self:end"><button class="btn accent">Gerar e baixar XMLs</button></div>
 </form>
-{% endif %}</div>
+{% else %}
+<p class="bad">Não existem pagamentos válidos para exportar nesta simulação.</p>
+<p class="muted">Cadastre ou corrija os IBANs e confira os valores negativos antes de tentar novamente.</p>
+{% endif %}
+</div>
 
 <div class="card"><h2>Pagamentos consolidados por IBAN</h2>
 <table><tr><th>Beneficiário</th><th>IBAN</th><th>Bruto</th><th>Combustível</th><th>Extras</th><th>Taxa</th><th>Final</th></tr>
 {% for r in valid %}<tr><td>{{r.nomes|join(', ')}}</td><td>{{r.iban}}</td><td>{{money(r.bruto)}}</td><td>{{money(r.combustivel)}}</td><td>{{money(r.extras)}}</td><td>{{money(r.taxa)}}</td><td><b>{{money(r.valor_final)}}</b></td></tr>{% endfor %}
 </table></div>
 
-<div class="card"><h2>Sem IBAN</h2>
+<div class="card"><div class="actions" style="justify-content:space-between;align-items:center"><h2>Sem IBAN</h2><a class="btn accent" href="/sem-iban">Cadastrar IBAN</a></div>
 <table><tr><th>Motorista</th><th>Valor antes da taxa</th></tr>
 {% for r in no_iban %}<tr><td class="warn">{{r.nome}}</td><td>{{money(r.antes_taxa)}}</td></tr>{% endfor %}
 </table></div>
@@ -1027,9 +1195,15 @@ def gerar_xml():
 
     c = db()
     valid, no_iban, invalid_iban, negatives, warnings = payment_preview(c, week, group, bank_fee)
-    if no_iban or invalid_iban or warnings:
+    confirmar_nomes = request.form.get("confirmar_iban_nomes") == "1"
+    if warnings and not confirmar_nomes:
         c.close()
-        flash("Existem pendências de IBAN. Corrija antes de gerar os XMLs.")
+        flash("Confirme que revisou os IBANs associados a nomes diferentes.")
+        return redirect(url_for("pagamentos",semana=week,grupo=group,taxa=bank_fee,partes=parts))
+
+    if not valid:
+        c.close()
+        flash("Não existem pagamentos válidos para gerar XML.")
         return redirect(url_for("pagamentos",semana=week,grupo=group,taxa=bank_fee,partes=parts))
 
     batches = split_batches(valid, 50000.0, parts)
