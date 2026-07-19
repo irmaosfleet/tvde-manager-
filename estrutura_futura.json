@@ -1,0 +1,31 @@
+{
+  "perfis_planejados": {
+    "administrador": [
+      "acesso_total",
+      "configuracoes",
+      "financeiro",
+      "utilizadores"
+    ],
+    "colaborador": [
+      "permissoes_definidas_pelo_administrador"
+    ],
+    "motorista": [
+      "proprios_ganhos",
+      "proprios_recibos",
+      "proprio_banco_horas",
+      "proprios_documentos"
+    ]
+  },
+  "modulos": [
+    "dashboard",
+    "motoristas",
+    "viaturas",
+    "relatorios_uber",
+    "relatorios_bolt",
+    "dinheiro_em_maos",
+    "recibos_pdf",
+    "alertas_documentos",
+    "banco_de_horas",
+    "utilizadores_e_permissoes"
+  ]
+}
