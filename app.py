@@ -4,6 +4,7 @@ from flask import (
     send_file, flash, session
 )
 from functools import wraps
+from werkzeug.security import generate_password_hash, check_password_hash
 from io import BytesIO, StringIO
 from zipfile import ZipFile, ZIP_DEFLATED
 from datetime import date, datetime, timedelta
@@ -37,7 +38,7 @@ def init_db():
     c.executescript("""
     CREATE TABLE IF NOT EXISTS motoristas(
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      nome TEXT NOT NULL UNIQUE,
+      nome TEXT NOT NULL,
       email TEXT,
       telefone TEXT,
       iban TEXT,
@@ -153,6 +154,46 @@ def init_db():
       reembolsos REAL DEFAULT 0,
       valor_liquido REAL DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS parceiros(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      nome TEXT NOT NULL UNIQUE,
+      email TEXT,
+      telefone TEXT,
+      ativo INTEGER DEFAULT 1,
+      criado_em TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS usuarios(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      nome TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'PARCEIRO',
+      parceiro_id INTEGER,
+      ativo INTEGER DEFAULT 1,
+      criado_em TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS iban_temporarios(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      motorista_id INTEGER NOT NULL,
+      semana TEXT NOT NULL,
+      grupo TEXT NOT NULL DEFAULT 'TVDE',
+      iban TEXT NOT NULL,
+      criado_em TEXT NOT NULL,
+      UNIQUE(motorista_id,semana,grupo)
+    );
+
+    CREATE TABLE IF NOT EXISTS auditoria_sistema(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      usuario TEXT NOT NULL,
+      acao TEXT NOT NULL,
+      entidade TEXT NOT NULL,
+      entidade_id TEXT,
+      detalhes TEXT,
+      criado_em TEXT NOT NULL
+    );
     """)
     cols = [r[1] for r in c.execute("PRAGMA table_info(motoristas)").fetchall()]
     if "cartao_prio" not in cols:
@@ -161,6 +202,23 @@ def init_db():
     report_cols = [r[1] for r in c.execute("PRAGMA table_info(relatorios)").fetchall()]
     if "grupo" not in report_cols:
         c.execute("ALTER TABLE relatorios ADD COLUMN grupo TEXT DEFAULT 'TVDE'")
+
+    driver_cols = [r[1] for r in c.execute("PRAGMA table_info(motoristas)").fetchall()]
+    extra_driver_cols = {
+        "external_id":"TEXT", "cidade":"TEXT", "companhia":"TEXT", "banco":"TEXT",
+        "comissao_admin":"REAL DEFAULT 0", "parceiro_nome":"TEXT", "parceiro_id":"INTEGER",
+        "comissao_parceiro":"REAL DEFAULT 0", "aluguel":"TEXT", "desconto_padrao":"REAL DEFAULT 0",
+        "reembolso_padrao":"REAL DEFAULT 0", "imediata":"REAL DEFAULT 0", "observacao":"TEXT",
+        "operacao":"TEXT DEFAULT 'TVDE'", "origem_banco":"TEXT", "data_cadastro":"TEXT"
+    }
+    for col, ddl in extra_driver_cols.items():
+        if col not in driver_cols:
+            c.execute(f"ALTER TABLE motoristas ADD COLUMN {col} {ddl}")
+
+    admin_exists = c.execute("SELECT id FROM usuarios WHERE username=?", (ADMIN_USER,)).fetchone()
+    if not admin_exists:
+        c.execute("INSERT INTO usuarios(username,password_hash,nome,role,criado_em) VALUES(?,?,?,?,?)",
+                  (ADMIN_USER,generate_password_hash(ADMIN_PASSWORD),'Administrador','ADMIN',datetime.now().isoformat(timespec='seconds')))
     c.commit()
     c.close()
 
@@ -201,6 +259,27 @@ def login_required(fn):
             return redirect(url_for("login", next=request.path))
         return fn(*args, **kwargs)
     return wrapper
+
+
+def admin_required(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not session.get("logged_in"):
+            return redirect(url_for("login", next=request.path))
+        if session.get("role") != "ADMIN":
+            flash("Acesso exclusivo do administrador.")
+            return redirect(url_for("dashboard"))
+        return fn(*args, **kwargs)
+    return wrapper
+
+def partner_filter(alias="m"):
+    if session.get("role") == "PARCEIRO":
+        return f" AND {alias}.parceiro_id=?", [session.get("parceiro_id")]
+    return "", []
+
+def audit(c, action, entity, entity_id="", details=""):
+    c.execute("INSERT INTO auditoria_sistema(usuario,acao,entidade,entidade_id,detalhes,criado_em) VALUES(?,?,?,?,?,?)",
+              (session.get('username','sistema'),action,entity,str(entity_id or ''),str(details or ''),datetime.now().isoformat(timespec='seconds')))
 
 
 BASE = """
@@ -298,17 +377,19 @@ button,.btn{border:0;border-radius:7px;background:#172033;color:white;padding:10
   <a href="/">⌂ Dashboard</a>
   <a href="/motoristas">♙ Motoristas</a>
   <a href="/viaturas">▣ Viaturas</a>
+  {% if session.get('role') == 'ADMIN' %}<a href="/parceiros">♚ Parceiros</a>{% endif %}
  </div>
  <div class="nav-title">Importações</div>
  <div class="nav">
-  <a href="/importar">⇧ Uber e Bolt</a>
-  <a href="/combustivel">⛽ Combustível PRIO</a>
+  {% if session.get('role') == 'ADMIN' %}<a href="/importar">⇧ Uber e Bolt</a>
+  <a href="/combustivel">⛽ Combustível PRIO</a>{% endif %}
  </div>
  <div class="nav-title">Financeiro</div>
  <div class="nav">
   <a href="/relatorios">▤ Relatórios</a>
-  <a href="/pagamentos">⇄ Pagamentos XML</a>
+  {% if session.get('role') == 'ADMIN' %}<a href="/pagamentos">⇄ Pagamentos XML</a>{% endif %}
   <a href="/auditoria-pagamentos">◎ Auditoria por IBAN</a>
+  {% if session.get('role') == 'ADMIN' %}<a href="/auditoria-sistema">◴ Histórico de alterações</a>{% endif %}
   <a href="/recibos">▧ Recibos</a>
  </div>
  <div class="nav-title">Pendências</div>
@@ -317,7 +398,7 @@ button,.btn{border:0;border-radius:7px;background:#172033;color:white;padding:10
  </div>
  <div class="nav-title">Conta</div>
  <div class="nav"><a href="/logout">↗ Sair</a></div>
- <div class="version">Versão 1.3</div>
+ <div class="version">Versão 2.0 · Base de Produção</div>
 </aside>
 <section class="main">
  <header class="topbar">
@@ -351,11 +432,18 @@ def render(title, body, **ctx):
 def login():
     error = ""
     if request.method == "POST":
-        user_ok = hmac.compare_digest(request.form.get("username", ""), ADMIN_USER)
-        pass_ok = hmac.compare_digest(request.form.get("password", ""), ADMIN_PASSWORD)
-        if user_ok and pass_ok:
-            session["logged_in"] = True
-            session["username"] = ADMIN_USER
+        username=request.form.get("username","").strip()
+        password=request.form.get("password","")
+        c=db()
+        user=c.execute("SELECT * FROM usuarios WHERE username=? AND ativo=1",(username,)).fetchone()
+        c.close()
+        if user and check_password_hash(user["password_hash"],password):
+            session.clear()
+            session["logged_in"]=True
+            session["username"]=user["username"]
+            session["display_name"]=user["nome"]
+            session["role"]=user["role"]
+            session["parceiro_id"]=user["parceiro_id"]
             return redirect(request.args.get("next") or url_for("dashboard"))
         error = "Utilizador ou senha incorretos."
     return render_template_string("""
@@ -389,19 +477,20 @@ def logout():
 @login_required
 def dashboard():
     c = db()
+    scope, scope_params = partner_filter("m")
     counts = {
-        "motoristas": c.execute("SELECT COUNT(*) n FROM motoristas WHERE ativo=1").fetchone()["n"],
-        "viaturas": c.execute("SELECT COUNT(*) n FROM viaturas").fetchone()["n"],
+        "motoristas": c.execute("SELECT COUNT(*) n FROM motoristas m WHERE ativo=1"+scope,scope_params).fetchone()["n"],
+        "viaturas": c.execute("SELECT COUNT(*) n FROM viaturas v LEFT JOIN motoristas m ON m.id=v.motorista_id WHERE 1=1"+scope,scope_params).fetchone()["n"],
     }
-    totals = c.execute("""SELECT COALESCE(SUM(bruto),0) bruto,
-                         COALESCE(SUM(comissao),0) comissao,
-                         COALESCE(SUM(dinheiro_maos),0) dinheiro,
-                         COALESCE(SUM(liquido),0) liquido
-                         FROM relatorios""").fetchone()
+    totals = c.execute("""SELECT COALESCE(SUM(r.bruto),0) bruto,
+                         COALESCE(SUM(r.comissao),0) comissao,
+                         COALESCE(SUM(r.dinheiro_maos),0) dinheiro,
+                         COALESCE(SUM(r.liquido),0) liquido
+                         FROM relatorios r JOIN motoristas m ON m.id=r.motorista_id WHERE 1=1"""+scope,scope_params).fetchone()
     fuel_total = c.execute("SELECT COALESCE(SUM(total),0) total FROM combustivel").fetchone()["total"]
     fuel_count = c.execute("SELECT COUNT(*) n FROM combustivel").fetchone()["n"]
     fuel_pending = c.execute("SELECT COUNT(*) n FROM combustivel WHERE motorista_id IS NULL").fetchone()["n"]
-    no_iban = c.execute("SELECT COUNT(*) n FROM motoristas WHERE TRIM(COALESCE(iban,''))=''").fetchone()["n"]
+    no_iban = c.execute("SELECT COUNT(*) n FROM motoristas m WHERE TRIM(COALESCE(iban,''))=''"+scope,scope_params).fetchone()["n"]
     recent = c.execute("""SELECT r.*,m.nome motorista FROM relatorios r
                           JOIN motoristas m ON m.id=r.motorista_id
                           ORDER BY r.id DESC LIMIT 6""").fetchall()
@@ -512,14 +601,26 @@ def dashboard():
                   recent=recent, alerts=alerts, fuel_top=fuel_top, xml_recent=xml_recent, money=money)
 
 
-def get_or_create_driver(c, name, email="", phone=""):
+def get_or_create_driver(c, name, email="", phone="", external_id=""):
     name = " ".join(str(name or "").split()).strip()
+    external_id = str(external_id or email or phone or "").strip()
     if not name:
         return None
-    found = c.execute("SELECT id FROM motoristas WHERE lower(nome)=lower(?)", (name,)).fetchone()
+    found = None
+    if external_id:
+        found = c.execute("SELECT id FROM motoristas WHERE lower(COALESCE(external_id,''))=lower(?)", (external_id,)).fetchone()
+    if not found and email:
+        found = c.execute("SELECT id FROM motoristas WHERE lower(COALESCE(email,''))=lower(?)", (email,)).fetchone()
+    if not found and phone:
+        found = c.execute("SELECT id FROM motoristas WHERE REPLACE(COALESCE(telefone,''),' ','')=REPLACE(?,' ','')", (phone,)).fetchone()
+    if not found:
+        matches = c.execute("SELECT id FROM motoristas WHERE lower(nome)=lower(?) ORDER BY CASE WHEN origem_banco='EXCEL_OFICIAL' THEN 0 ELSE 1 END,id", (name,)).fetchall()
+        if len(matches)==1:
+            found=matches[0]
     if found:
         return found["id"]
-    cur = c.execute("INSERT INTO motoristas(nome,email,telefone) VALUES(?,?,?)", (name, email, phone))
+    cur = c.execute("INSERT INTO motoristas(nome,email,telefone,external_id,origem_banco,data_cadastro) VALUES(?,?,?,?,?,?)",
+                    (name,email,phone,external_id,'IMPORTACAO',datetime.now().isoformat(timespec='seconds')))
     return cur.lastrowid
 
 
@@ -531,7 +632,7 @@ def import_uber(c, rows, week):
         name = " ".join((first + " " + last).split())
         if not name:
             continue
-        driver_id = get_or_create_driver(c, name)
+        driver_id = get_or_create_driver(c, name, external_id=row.get("UUID do motorista",""))
         bruto = num(row.get("Pago a si : Os seus rendimentos : Tarifa"))
         dinheiro = abs(num(row.get("Pago a si : Saldo da viagem : Pagamentos : Dinheiro recebido")))
         service = abs(num(row.get("Pago a si:Os seus rendimentos:Taxa de serviço")))
@@ -555,7 +656,7 @@ def import_bolt(c, rows, week):
         name = row.get("Motorista", "")
         if not name:
             continue
-        driver_id = get_or_create_driver(c, name, row.get("Email",""), row.get("Telemóvel",""))
+        driver_id = get_or_create_driver(c, name, row.get("Email",""), row.get("Telemóvel",""), row.get("Telemóvel","") or row.get("Email",""))
         bruto = num(row.get("Ganhos brutos (total)|€"))
         dinheiro = abs(num(row.get("Dinheiro recebido|€")))
         commission = abs(num(row.get("Comissões|€")))
@@ -576,7 +677,7 @@ def import_bolt(c, rows, week):
 
 
 @app.route("/importar", methods=["GET","POST"])
-@login_required
+@admin_required
 def importar():
     if request.method == "POST":
         f = request.files.get("arquivo")
@@ -649,18 +750,24 @@ def motoristas():
     c = db()
     if request.method == "POST":
         try:
-            c.execute("""INSERT INTO motoristas(nome,email,telefone,iban,percentual,cartao_prio)
-                         VALUES(?,?,?,?,?,?)""",
-                      (request.form["nome"].strip(),request.form.get("email","").strip(),
-                       request.form.get("telefone","").strip(),request.form.get("iban","").strip(),
-                       num(request.form.get("percentual")),
-                       request.form.get("cartao_prio","").replace(" ","").strip()))
+            c.execute("""INSERT INTO motoristas(nome,email,telefone,iban,percentual,cartao_prio,cidade,companhia,operacao,parceiro_id,parceiro_nome,comissao_admin,comissao_parceiro,observacao,origem_banco)
+                         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                      (request.form["nome"].strip(),request.form.get("email","").strip(),request.form.get("telefone","").strip(),iban_clean(request.form.get("iban","")),
+                       num(request.form.get("percentual")),request.form.get("cartao_prio","").replace(" ","").strip(),request.form.get("cidade","").strip(),request.form.get("companhia","").strip(),request.form.get("operacao","TVDE"),request.form.get("parceiro_id") or None,request.form.get("parceiro_nome","").strip(),num(request.form.get("comissao_admin")),num(request.form.get("comissao_parceiro")),request.form.get("observacao","").strip(),'SISTEMA'))
             c.commit(); flash("Motorista cadastrado.")
         except sqlite3.IntegrityError:
             flash("Esse motorista já está cadastrado.")
         c.close()
         return redirect(url_for("motoristas"))
-    rows = c.execute("SELECT * FROM motoristas ORDER BY nome").fetchall()
+    scope,params=partner_filter("m")
+    busca=request.args.get("busca","").strip()
+    filtro=""
+    if busca:
+        filtro=" AND (m.nome LIKE ? OR m.external_id LIKE ? OR m.iban LIKE ? OR m.cartao_prio LIKE ? OR m.cidade LIKE ? OR m.companhia LIKE ?)"
+        term=f"%{busca}%"; params=params+[term]*6
+    rows = c.execute("SELECT m.*,p.nome parceiro FROM motoristas m LEFT JOIN parceiros p ON p.id=m.parceiro_id WHERE 1=1"+scope+filtro+" ORDER BY m.nome LIMIT 1000",params).fetchall()
+    total=c.execute("SELECT COUNT(*) n FROM motoristas m WHERE 1=1"+scope,partner_filter('m')[1]).fetchone()['n']
+    partners=c.execute("SELECT * FROM parceiros WHERE ativo=1 ORDER BY nome").fetchall() if session.get("role")=="ADMIN" else []
     c.close()
     body = """
 <div class="card"><h2>Novo motorista</h2><form method="post" class="grid">
@@ -669,17 +776,63 @@ def motoristas():
 <label>Telefone<input name="telefone"></label>
 <label>IBAN<input name="iban"></label>
 <label>Percentual (%)<input name="percentual" type="number" step="0.01"></label>
-<label>Número do cartão PRIO<input name="cartao_prio" inputmode="numeric"></label>
+<label>Número do cartão PRIO<input name="cartao_prio" inputmode="numeric"></label><label>Cidade<input name="cidade"></label><label>Companhia<input name="companhia"></label><label>Operação<select name="operacao"><option>TVDE</option><option>DELIVERY</option></select></label>{% if session.get('role')=='ADMIN' %}<label>Parceiro<select name="parceiro_id"><option value="">Sem parceiro</option>{% for p in partners %}<option value="{{p.id}}">{{p.nome}}</option>{% endfor %}</select></label>{% endif %}<label>Comissão admin<input name="comissao_admin" type="number" step="0.01"></label><label>Comissão parceiro<input name="comissao_parceiro" type="number" step="0.01"></label><label>Observação<input name="observacao"></label>
 <div style="align-self:end"><button>Cadastrar</button></div>
 </form></div>
-<div class="card"><h2>Motoristas</h2>
-<table><tr><th>Nome</th><th>E-mail</th><th>Telefone</th><th>IBAN</th><th>Cartão PRIO</th><th>%</th></tr>
+<div class="card"><div class="card-header"><h2>Motoristas ({{total}} cadastrados)</h2></div><div class="card-body"><form method="get" class="grid" style="margin-bottom:14px"><label>Pesquisar por nome, ID, IBAN, cartão, cidade ou companhia<input name="busca" value="{{busca}}"></label><div style="align-self:end"><button class="btn primary">Pesquisar</button></div></form></div>
+<table><tr><th>Nome</th><th>ID</th><th>Cidade/Companhia</th><th>Operação</th><th>Parceiro</th><th>IBAN</th><th>Cartão PRIO</th><th>%</th></tr>
 {% for r in rows %}
-<tr><td><b>{{r.nome}}</b></td><td>{{r.email}}</td><td>{{r.telefone}}</td><td>{{r.iban}}</td><td>{{r.cartao_prio or '-'}}</td><td>{{r.percentual}}</td></tr>
+<tr><td><b>{{r.nome}}</b><br><span class="muted">{{r.email or ''}} {{r.telefone or ''}}</span></td><td>{{r.external_id or r.id}}</td><td>{{r.cidade or '-'}}<br>{{r.companhia or ''}}</td><td>{{r.operacao or 'TVDE'}}</td><td>{{r.parceiro or r.parceiro_nome or '-'}}</td><td>{{r.iban or '-'}}</td><td>{{r.cartao_prio or '-'}}</td><td>{{r.percentual}}</td></tr>
 {% endfor %}</table></div>
 """
-    return render("Motoristas", body, rows=rows)
+    return render("Motoristas", body, rows=rows, partners=partners, total=total, busca=busca)
 
+
+
+@app.route("/parceiros", methods=["GET","POST"])
+@admin_required
+def parceiros():
+    c=db()
+    if request.method == "POST":
+        nome=request.form.get("nome","").strip()
+        username=request.form.get("username","").strip()
+        password=request.form.get("password","").strip()
+        email=request.form.get("email","").strip()
+        telefone=request.form.get("telefone","").strip()
+        if not nome:
+            c.close(); flash("Informe o nome do parceiro."); return redirect(url_for("parceiros"))
+        row=c.execute("SELECT id FROM parceiros WHERE nome=?",(nome,)).fetchone()
+        if row: pid=row['id']
+        else:
+            cur=c.execute("INSERT INTO parceiros(nome,email,telefone,criado_em) VALUES(?,?,?,?)",(nome,email,telefone,datetime.now().isoformat(timespec='seconds'))); pid=cur.lastrowid
+        c.execute("UPDATE motoristas SET parceiro_id=? WHERE LOWER(TRIM(parceiro_nome))=LOWER(TRIM(?))",(pid,nome))
+        if username and password:
+            existing=c.execute("SELECT id FROM usuarios WHERE username=?",(username,)).fetchone()
+            if existing:
+                c.execute("UPDATE usuarios SET password_hash=?,nome=?,role='PARCEIRO',parceiro_id=?,ativo=1 WHERE id=?",(generate_password_hash(password),nome,pid,existing['id']))
+            else:
+                c.execute("INSERT INTO usuarios(username,password_hash,nome,role,parceiro_id,criado_em) VALUES(?,?,?,?,?,?)",(username,generate_password_hash(password),nome,'PARCEIRO',pid,datetime.now().isoformat(timespec='seconds')))
+        audit(c,'CADASTRO','PARCEIRO',pid,nome); c.commit(); c.close(); flash("Parceiro e acesso atualizados."); return redirect(url_for("parceiros"))
+    rows=c.execute("""SELECT p.*,COUNT(DISTINCT m.id) motoristas,COUNT(DISTINCT u.id) acessos
+                      FROM parceiros p LEFT JOIN motoristas m ON m.parceiro_id=p.id LEFT JOIN usuarios u ON u.parceiro_id=p.id
+                      GROUP BY p.id ORDER BY p.nome""").fetchall(); c.close()
+    body="""
+<div class="card"><h2>Cadastrar parceiro e acesso</h2><form method="post" class="grid">
+<label>Parceiro<input name="nome" required></label><label>E-mail<input name="email" type="email"></label><label>Telefone<input name="telefone"></label>
+<label>Utilizador de acesso<input name="username"></label><label>Senha inicial<input name="password" type="password"></label>
+<div style="align-self:end"><button class="btn primary">Salvar parceiro</button></div></form></div>
+<div class="card"><h2>Parceiros</h2><table><tr><th>Parceiro</th><th>Motoristas</th><th>Acessos</th><th>Contato</th></tr>
+{% for r in rows %}<tr><td><b>{{r.nome}}</b></td><td>{{r.motoristas}}</td><td>{{r.acessos}}</td><td>{{r.email or '-'}}<br>{{r.telefone or ''}}</td></tr>{% endfor %}</table></div>
+"""
+    return render("Parceiros",body,rows=rows)
+
+@app.route("/auditoria-sistema")
+@admin_required
+def auditoria_sistema():
+    c=db(); rows=c.execute("SELECT * FROM auditoria_sistema ORDER BY id DESC LIMIT 500").fetchall(); c.close()
+    body="""<div class="card"><h2>Histórico de alterações</h2><table><tr><th>Data</th><th>Utilizador</th><th>Ação</th><th>Entidade</th><th>Detalhes</th></tr>
+    {% for r in rows %}<tr><td>{{r.criado_em}}</td><td>{{r.usuario}}</td><td>{{r.acao}}</td><td>{{r.entidade}} #{{r.entidade_id}}</td><td>{{r.detalhes}}</td></tr>{% endfor %}</table></div>"""
+    return render("Auditoria do Sistema",body,rows=rows)
 
 @app.route("/viaturas", methods=["GET","POST"])
 @login_required
@@ -717,7 +870,7 @@ def viaturas():
 
 
 @app.route("/combustivel", methods=["GET","POST"])
-@login_required
+@admin_required
 def combustivel():
     c = db()
     if request.method == "POST":
@@ -873,23 +1026,25 @@ def sem_iban():
             flash("O IBAN informado não é válido.")
             return redirect(url_for("sem_iban"))
 
-        duplicate = c.execute(
-            "SELECT id,nome FROM motoristas WHERE iban=? AND id<>?",
-            (iban, driver_id)
-        ).fetchone()
-
-        if duplicate:
-            c.close()
-            flash(f"Este IBAN já está cadastrado para {duplicate['nome']}. Confira antes de continuar.")
-            return redirect(url_for("sem_iban"))
-
-        c.execute(
-            "UPDATE motoristas SET iban=?,email=?,telefone=? WHERE id=?",
-            (iban, email, telefone, driver_id)
-        )
-        c.commit()
-        c.close()
-        flash("IBAN cadastrado. O motorista já pode entrar na próxima simulação de pagamento.")
+        modo=request.form.get("modo","definitivo")
+        semana=request.form.get("semana","").strip()
+        grupo=request.form.get("grupo","TVDE").strip()
+        duplicates=c.execute("SELECT id,nome FROM motoristas WHERE iban=? AND id<>?",(iban,driver_id)).fetchall()
+        if modo == "temporario":
+            if not semana:
+                c.close(); flash("Informe a semana para o IBAN temporário."); return redirect(url_for("sem_iban"))
+            c.execute("INSERT INTO iban_temporarios(motorista_id,semana,grupo,iban,criado_em) VALUES(?,?,?,?,?) ON CONFLICT(motorista_id,semana,grupo) DO UPDATE SET iban=excluded.iban,criado_em=excluded.criado_em",
+                      (driver_id,semana,grupo,iban,datetime.now().isoformat(timespec='seconds')))
+            audit(c,'CADASTRO','IBAN_TEMPORARIO',driver_id,f'{semana} {grupo} {iban}')
+            message="IBAN salvo somente para este pagamento."
+        else:
+            c.execute("UPDATE motoristas SET iban=?,email=?,telefone=? WHERE id=?",(iban,email,telefone,driver_id))
+            audit(c,'ALTERACAO','MOTORISTA_IBAN',driver_id,iban)
+            message="IBAN cadastrado definitivamente e liberado para pagamentos."
+        c.commit(); c.close()
+        if duplicates:
+            message += " Atenção: este IBAN também está ligado a " + ", ".join(r['nome'] for r in duplicates) + ". O agrupamento será mantido com detalhamento individual."
+        flash(message)
         return redirect(url_for("sem_iban"))
 
     rows = c.execute("""
@@ -956,6 +1111,9 @@ Ao salvar um IBAN válido, a pessoa deixa esta lista e passa a entrar na simula�
   <label>Telefone
     <input name="telefone" value="{{r.telefone or ''}}">
   </label>
+  <label>Semana (uso temporário)<input type="week" name="semana"></label>
+  <label>Grupo<select name="grupo"><option value="TVDE">TVDE</option><option value="DELIVERY">Delivery</option></select></label>
+  <label>Como salvar?<select name="modo"><option value="definitivo">Cadastrar definitivamente</option><option value="temporario">Usar somente neste pagamento</option></select></label>
   <div style="align-self:end">
     <button class="btn accent">Salvar e liberar pagamento</button>
   </div>
@@ -1033,7 +1191,7 @@ def payment_preview(c, week, group, bank_fee):
     extras = week_extra_by_driver(c, week, group)
 
     rows = c.execute("""
-        SELECT r.motorista_id,m.nome,m.iban,
+        SELECT r.motorista_id,m.nome,COALESCE(t.iban,m.iban) iban,
                COALESCE(SUM(r.bruto),0) bruto,
                COALESCE(SUM(r.dinheiro_maos),0) dinheiro,
                COALESCE(SUM(r.comissao),0) comissao,
@@ -1043,8 +1201,9 @@ def payment_preview(c, week, group, bank_fee):
                COALESCE(SUM(r.liquido),0) base_liquida
         FROM relatorios r
         JOIN motoristas m ON m.id=r.motorista_id
+        LEFT JOIN iban_temporarios t ON t.motorista_id=m.id AND t.semana=r.semana AND t.grupo=COALESCE(r.grupo,'TVDE')
         WHERE r.semana=? AND COALESCE(r.grupo,'TVDE')=?
-        GROUP BY r.motorista_id,m.nome,m.iban
+        GROUP BY r.motorista_id,m.nome,COALESCE(t.iban,m.iban)
         ORDER BY m.nome
     """, (week, group)).fetchall()
 
@@ -1215,7 +1374,7 @@ def descontos_extra():
 
 
 @app.route("/pagamentos", methods=["GET","POST"])
-@login_required
+@admin_required
 def pagamentos():
     c = db()
     week = request.values.get("semana","").strip()
@@ -1340,7 +1499,7 @@ Confirmo que revisei os IBANs associados a nomes diferentes.
 
 
 @app.route("/gerar-xml", methods=["POST"])
-@login_required
+@admin_required
 def gerar_xml():
     week = request.form.get("semana","").strip()
     group = request.form.get("grupo","TVDE").strip()
@@ -1561,7 +1720,81 @@ def recibo(rid):
                      download_name=f"recibo_{r['motorista']}_{r['semana']}.pdf")
 
 
+def rebuild_motoristas_if_needed(c):
+    sqlrow=c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='motoristas'").fetchone()
+    sql=(sqlrow[0] or '') if sqlrow else ''
+    if 'nome TEXT NOT NULL UNIQUE' not in sql:
+        return
+    c.execute("ALTER TABLE motoristas RENAME TO motoristas_antigos")
+    c.execute("""CREATE TABLE motoristas(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,nome TEXT NOT NULL,email TEXT,telefone TEXT,iban TEXT,
+      percentual REAL DEFAULT 0,ativo INTEGER DEFAULT 1,cartao_prio TEXT,external_id TEXT,cidade TEXT,
+      companhia TEXT,banco TEXT,comissao_admin REAL DEFAULT 0,parceiro_nome TEXT,parceiro_id INTEGER,
+      comissao_parceiro REAL DEFAULT 0,aluguel TEXT,desconto_padrao REAL DEFAULT 0,reembolso_padrao REAL DEFAULT 0,
+      imediata REAL DEFAULT 0,observacao TEXT,operacao TEXT DEFAULT 'TVDE',origem_banco TEXT,data_cadastro TEXT
+    )""")
+    oldcols={r[1] for r in c.execute("PRAGMA table_info(motoristas_antigos)").fetchall()}
+    newcols=[r[1] for r in c.execute("PRAGMA table_info(motoristas)").fetchall()]
+    common=[x for x in newcols if x in oldcols]
+    if common:
+        cols=','.join(common)
+        c.execute(f"INSERT INTO motoristas({cols}) SELECT {cols} FROM motoristas_antigos")
+    c.execute("DROP TABLE motoristas_antigos")
+
+
+def import_official_database():
+    json_path=os.path.join(os.path.dirname(__file__),'banco_oficial.json')
+    if not os.path.exists(json_path):
+        return
+    import json
+    c=db()
+    rebuild_motoristas_if_needed(c)
+    count=c.execute("SELECT COUNT(*) FROM motoristas WHERE origem_banco='EXCEL_OFICIAL'").fetchone()[0]
+    if count:
+        c.commit(); c.close(); return
+    with open(json_path,encoding='utf-8') as f:
+        records=json.load(f)
+    partner_ids={}
+    for r in records:
+        partner=str(r.get('Parceiro_2') or '').strip()
+        if not partner or partner=='-': continue
+        row=c.execute("SELECT id FROM parceiros WHERE lower(nome)=lower(?)",(partner,)).fetchone()
+        if row: partner_ids[partner.lower()]=row['id']
+        else:
+            cur=c.execute("INSERT INTO parceiros(nome,criado_em) VALUES(?,?)",(partner,datetime.now().isoformat(timespec='seconds')))
+            partner_ids[partner.lower()]=cur.lastrowid
+    def fnum(v):
+        try: return float(str(v or '0').replace(',','.'))
+        except: return 0.0
+    for r in records:
+        name=str(r.get('MOTORISTA_BD') or '').strip()
+        ext=str(r.get('ID') or '').strip()
+        if not name or not ext: continue
+        partner=str(r.get('Parceiro_2') or '').strip()
+        if partner=='-': partner=''
+        company=str(r.get('Companhia') or '').strip()
+        city=str(r.get('Cidade') or '').strip()
+        operation='DELIVERY' if any(x in (company+' '+city).upper() for x in ['EATS','FOOD','BIKE','MOTO']) else 'TVDE'
+        iban=iban_clean(r.get('IBAN')) if str(r.get('IBAN') or '').strip() not in ('','-') else ''
+        card=str(r.get('Numero_Cartao_Combustivel') or '').strip().replace(' ','')
+        if card in ('','-'): card=''
+        data=str(r.get('Data') or '').strip()
+        c.execute("""INSERT INTO motoristas(nome,email,telefone,iban,percentual,ativo,cartao_prio,external_id,cidade,companhia,banco,
+                     comissao_admin,parceiro_nome,parceiro_id,comissao_parceiro,aluguel,desconto_padrao,reembolso_padrao,imediata,
+                     observacao,operacao,origem_banco,data_cadastro)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                  (name,'','',iban,fnum(r.get('Porcentagem')),1,card,ext,city,company,str(r.get('Banco') or '').strip(),
+                   fnum(r.get('Comissao_Muryllo')),partner,partner_ids.get(partner.lower()) if partner else None,
+                   fnum(r.get('Comissao_2')),str(r.get('Aluguel') or '').strip(),fnum(r.get('Desconto_(-)')),
+                   fnum(r.get('Reembolso_(+)')),fnum(r.get('Imediata_(-)')),str(r.get('Observação') or '').strip(),
+                   operation,'EXCEL_OFICIAL',data))
+    c.execute("INSERT INTO auditoria_sistema(usuario,acao,entidade,entidade_id,detalhes,criado_em) VALUES(?,?,?,?,?,?)",
+              ('sistema','MIGRACAO','BANCO_DE_DADOS','',f'{len(records)} registros importados',datetime.now().isoformat(timespec='seconds')))
+    c.commit(); c.close()
+
+
 init_db()
+import_official_database()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT",5000)), debug=False)

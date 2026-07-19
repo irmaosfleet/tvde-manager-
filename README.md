@@ -1,28 +1,44 @@
-# Irmãos Fleet 1.0
+# Plataforma Irmãos Fleet 2.0 — Base de Produção
 
-## Login inicial
+Esta atualização substitui a versão 1.4 e utiliza o banco oficial enviado pelo utilizador.
+
+## Incluído nesta versão
+
+- Migração do `BANCO_DE_DADOS.xlsx` para SQLite.
+- 10.381 cadastros oficiais importados.
+- 24 parceiros identificados e vinculados aos motoristas.
+- Campos migrados: ID, nome, cidade, companhia, IBAN, banco, comissões, parceiro, cartão PRIO, percentagem, aluguel, descontos, reembolsos, imediata e observação.
+- Pesquisa no cadastro por nome, ID, IBAN, cartão, cidade e companhia.
+- Tela **Sem IBAN** com duas opções:
+  - cadastro definitivo no banco;
+  - IBAN temporário somente para uma semana e grupo.
+- IBAN compartilhado permitido, com alerta e composição individual no relatório.
+- Agrupamento de pagamentos por IBAN com uma taxa bancária por transferência.
+- Auditoria de pagamentos por IBAN.
+- Histórico de alterações do sistema.
+- Cadastro de parceiros e criação de login.
+- Perfil Administrador com acesso total.
+- Perfil Parceiro limitado aos próprios motoristas.
+- Importação Uber, Bolt e PRIO mantida.
+- XML `pain.001.001.03`, divisão por partes e limite de €50.000 mantidos.
+
+## Primeiro acesso
+
 - Utilizador: `admin`
 - Senha: `admin123`
 
-Altere no Render em Environment:
-- `ADMIN_USER`
-- `ADMIN_PASSWORD`
-- `SECRET_KEY`
+Altere as variáveis `ADMIN_USER`, `ADMIN_PASSWORD` e `SECRET_KEY` no Render antes do uso real.
 
-## Funcionalidades
-- Login protegido
-- Interface responsiva
-- Dashboard
-- Importação automática Uber e Bolt
-- Dinheiro em mãos
-- Motoristas
-- Viaturas
-- Alertas
-- Relatórios
-- Recibos PDF
+## Atualização no GitHub
 
-## Render
-Build: `pip install -r requirements.txt`
-Start: `gunicorn app:app`
+Substitua todos os arquivos do repositório pelos arquivos deste pacote e aguarde o novo deploy do Render.
 
-Observação: nesta versão o SQLite é adequado para demonstração. Para uso real e vários utilizadores, migrar para PostgreSQL.
+## Segurança obrigatória
+
+Este pacote contém dados reais, incluindo IBANs. O repositório do GitHub deve ser **PRIVADO**. Nunca publique este ZIP ou o banco em um repositório público.
+
+Para uso contínuo no Render, configure um Persistent Disk e defina `DB_PATH` apontando para esse disco, para que novos dados não sejam perdidos em um redeploy.
+
+## Observação
+
+A base de permissões de parceiros está pronta. Os acessos de cada parceiro são criados na tela **Parceiros**, informando utilizador e senha inicial. O portal detalhado do motorista será a etapa seguinte.
