@@ -1,21 +1,28 @@
-# TVDE Manager — versão de teste online
+# Irmãos Fleet 1.0
 
-Arquivos prontos para publicação no Render.
+## Login inicial
+- Utilizador: `admin`
+- Senha: `admin123`
 
-## Publicação
-- Build command: `pip install -r requirements.txt`
-- Start command: `gunicorn app:app`
+Altere no Render em Environment:
+- `ADMIN_USER`
+- `ADMIN_PASSWORD`
+- `SECRET_KEY`
 
-## Aviso desta primeira demonstração
-A versão inicial usa SQLite. No Render, os dados de teste podem ser apagados quando o serviço reiniciar.
-Antes do uso real, o banco será migrado para PostgreSQL.
-
-## Funcionalidades atuais
+## Funcionalidades
+- Login protegido
+- Interface responsiva
 - Dashboard
+- Importação automática Uber e Bolt
+- Dinheiro em mãos
 - Motoristas
 - Viaturas
-- Alertas de documentos
-- Relatórios Uber e Bolt
-- Dinheiro em mãos
-- Cálculo líquido
+- Alertas
+- Relatórios
 - Recibos PDF
+
+## Render
+Build: `pip install -r requirements.txt`
+Start: `gunicorn app:app`
+
+Observação: nesta versão o SQLite é adequado para demonstração. Para uso real e vários utilizadores, migrar para PostgreSQL.
