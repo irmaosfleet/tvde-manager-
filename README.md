@@ -42,3 +42,8 @@ Para uso contínuo no Render, configure um Persistent Disk e defina `DB_PATH` ap
 ## Observação
 
 A base de permissões de parceiros está pronta. Os acessos de cada parceiro são criados na tela **Parceiros**, informando utilizador e senha inicial. O portal detalhado do motorista será a etapa seguinte.
+
+## Correção 2.0.1
+- Corrigido erro 500 na tela de preparação/geração dos XMLs.
+- Corrigido conflito do Jinja com a chave `items` dos lotes de pagamentos.
+- Pacote organizado com os arquivos na raiz para facilitar o upload ao GitHub.

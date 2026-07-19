@@ -1428,7 +1428,7 @@ def pagamentos():
 
 <div class="card"><h2>Divisão prevista</h2>
 <table><tr><th>Parte</th><th>Transferências</th><th>Total</th></tr>
-{% for b in batches %}<tr><td>{{loop.index}}</td><td>{{b.items|length}}</td><td><b>{{money(b.total)}}</b></td></tr>{% endfor %}
+{% for b in batches %}<tr><td>{{loop.index}}</td><td>{{b["items"]|length}}</td><td><b>{{money(b.total)}}</b></td></tr>{% endfor %}
 </table>
 </div>
 
