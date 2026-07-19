@@ -5,12 +5,15 @@ from flask import (
 )
 from functools import wraps
 from io import BytesIO, StringIO
+from zipfile import ZipFile, ZIP_DEFLATED
 from datetime import date, datetime, timedelta
 import csv
 import hmac
 import os
 import sqlite3
 import unicodedata
+import uuid
+import xml.etree.ElementTree as ET
 
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
@@ -101,10 +104,35 @@ def init_db():
       pendentes INTEGER DEFAULT 0,
       criado_em TEXT NOT NULL
     );
+    
+    CREATE TABLE IF NOT EXISTS descontos_extras(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      motorista_id INTEGER NOT NULL,
+      semana TEXT NOT NULL,
+      grupo TEXT NOT NULL DEFAULT 'TVDE',
+      categoria TEXT NOT NULL,
+      descricao TEXT,
+      valor REAL NOT NULL DEFAULT 0,
+      criado_em TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS xml_historico(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      semana TEXT NOT NULL,
+      grupo TEXT NOT NULL,
+      arquivo TEXT NOT NULL,
+      pagamentos INTEGER NOT NULL,
+      total REAL NOT NULL,
+      criado_em TEXT NOT NULL
+    );
     """)
     cols = [r[1] for r in c.execute("PRAGMA table_info(motoristas)").fetchall()]
     if "cartao_prio" not in cols:
         c.execute("ALTER TABLE motoristas ADD COLUMN cartao_prio TEXT")
+
+    report_cols = [r[1] for r in c.execute("PRAGMA table_info(relatorios)").fetchall()]
+    if "grupo" not in report_cols:
+        c.execute("ALTER TABLE relatorios ADD COLUMN grupo TEXT DEFAULT 'TVDE'")
     c.commit()
     c.close()
 
@@ -205,6 +233,7 @@ button,.btn{border:0;border-radius:10px;background:#111827;color:#fff;padding:11
   <a href="/viaturas">▣ Viaturas</a>
   <a href="/recibos">▤ Recibos</a>
   <a href="/combustivel">⛽ Combustível</a>
+  <a href="/pagamentos">⇄ Pagamentos XML</a>
  </nav>
  <div class="logout"><a class="btn secondary" style="width:100%;text-align:center" href="/logout">Sair</a></div>
 </aside>
@@ -212,7 +241,7 @@ button,.btn{border:0;border-radius:10px;background:#111827;color:#fff;padding:11
  <header class="top"><h1>{{ title }}</h1><div class="user">Administrador · Irmãos Fleet</div></header>
  <nav class="mobilebar">
   <a href="/">Dashboard</a><a href="/importar">Importar</a><a href="/relatorios">Relatórios</a>
-  <a href="/motoristas">Motoristas</a><a href="/viaturas">Viaturas</a><a href="/recibos">Recibos</a><a href="/combustivel">Combustível</a><a href="/logout">Sair</a>
+  <a href="/motoristas">Motoristas</a><a href="/viaturas">Viaturas</a><a href="/recibos">Recibos</a><a href="/combustivel">Combustível</a><a href="/pagamentos">XML</a><a href="/logout">Sair</a>
  </nav>
  <main class="content">
  {% with messages = get_flashed_messages() %}
@@ -351,6 +380,7 @@ def import_uber(c, rows, week):
                    VALUES('Uber',?,?,?,?,?,?,?,?,?,?)""",
                   (driver_id, week, bruto, dinheiro, service, tolls, 0, tolls, liquid,
                    datetime.now().isoformat(timespec="seconds")))
+        c.execute("UPDATE relatorios SET grupo='TVDE' WHERE id=last_insert_rowid()")
         count += 1
     return count
 
@@ -375,6 +405,7 @@ def import_bolt(c, rows, week):
                    VALUES('Bolt',?,?,?,?,?,?,?,?,?,?)""",
                   (driver_id, week, bruto, dinheiro, commission, tolls, other, reimburse, liquid,
                    datetime.now().isoformat(timespec="seconds")))
+        c.execute("UPDATE relatorios SET grupo='TVDE' WHERE id=last_insert_rowid()")
         count += 1
     return count
 
@@ -645,6 +676,378 @@ def combustivel():
 {% else %}<p class="muted">Nenhuma pendência.</p>{% endif %}</div>
 """
     return render("Combustível", body, summary=summary, by_driver=by_driver, pending_rows=pending_rows, money=money)
+
+
+
+def iban_clean(value):
+    return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+
+
+def iban_valid(value):
+    iban = iban_clean(value)
+    if len(iban) < 15 or len(iban) > 34:
+        return False
+    if not iban[:2].isalpha() or not iban[2:4].isdigit():
+        return False
+    rearranged = iban[4:] + iban[:4]
+    converted = ""
+    for ch in rearranged:
+        converted += str(ord(ch) - 55) if ch.isalpha() else ch
+    try:
+        return int(converted) % 97 == 1
+    except ValueError:
+        return False
+
+
+def week_fuel_by_driver(c, week):
+    rows = c.execute("""
+        SELECT motorista_id, COALESCE(SUM(total),0) total
+        FROM combustivel
+        WHERE semana=? AND motorista_id IS NOT NULL
+        GROUP BY motorista_id
+    """, (week,)).fetchall()
+    return {r["motorista_id"]: float(r["total"] or 0) for r in rows}
+
+
+def week_extra_by_driver(c, week, group):
+    rows = c.execute("""
+        SELECT motorista_id, COALESCE(SUM(valor),0) total
+        FROM descontos_extras
+        WHERE semana=? AND grupo=?
+        GROUP BY motorista_id
+    """, (week, group)).fetchall()
+    return {r["motorista_id"]: float(r["total"] or 0) for r in rows}
+
+
+def payment_preview(c, week, group, bank_fee):
+    fuel = week_fuel_by_driver(c, week)
+    extras = week_extra_by_driver(c, week, group)
+
+    rows = c.execute("""
+        SELECT r.motorista_id,m.nome,m.iban,
+               COALESCE(SUM(r.bruto),0) bruto,
+               COALESCE(SUM(r.dinheiro_maos),0) dinheiro,
+               COALESCE(SUM(r.comissao),0) comissao,
+               COALESCE(SUM(r.portagens),0) portagens,
+               COALESCE(SUM(r.outros_descontos),0) outros,
+               COALESCE(SUM(r.reembolsos),0) reembolsos,
+               COALESCE(SUM(r.liquido),0) base_liquida
+        FROM relatorios r
+        JOIN motoristas m ON m.id=r.motorista_id
+        WHERE r.semana=? AND COALESCE(r.grupo,'TVDE')=?
+        GROUP BY r.motorista_id,m.nome,m.iban
+        ORDER BY m.nome
+    """, (week, group)).fetchall()
+
+    people = []
+    for r in rows:
+        driver_id = r["motorista_id"]
+        fuel_value = fuel.get(driver_id, 0.0) if group == "TVDE" else 0.0
+        extra_value = extras.get(driver_id, 0.0)
+        amount_before_fee = float(r["base_liquida"] or 0) - fuel_value - extra_value
+        people.append({
+            "motorista_id": driver_id,
+            "nome": r["nome"],
+            "iban": iban_clean(r["iban"]),
+            "bruto": float(r["bruto"] or 0),
+            "dinheiro": float(r["dinheiro"] or 0),
+            "comissao": float(r["comissao"] or 0),
+            "portagens": float(r["portagens"] or 0),
+            "outros": float(r["outros"] or 0),
+            "reembolsos": float(r["reembolsos"] or 0),
+            "combustivel": fuel_value,
+            "extras": extra_value,
+            "antes_taxa": amount_before_fee,
+        })
+
+    grouped = {}
+    no_iban = []
+    invalid_iban = []
+    for p in people:
+        if not p["iban"]:
+            no_iban.append(p)
+            continue
+        if not iban_valid(p["iban"]):
+            invalid_iban.append(p)
+            continue
+        key = p["iban"]
+        if key not in grouped:
+            grouped[key] = {
+                "iban": key, "nomes": [], "motoristas": [],
+                "bruto": 0, "dinheiro": 0, "comissao": 0, "portagens": 0,
+                "outros": 0, "reembolsos": 0, "combustivel": 0, "extras": 0,
+                "antes_taxa": 0
+            }
+        g = grouped[key]
+        g["nomes"].append(p["nome"])
+        g["motoristas"].append(p["motorista_id"])
+        for field in ["bruto","dinheiro","comissao","portagens","outros","reembolsos","combustivel","extras","antes_taxa"]:
+            g[field] += p[field]
+
+    valid = []
+    negatives = []
+    warnings = []
+    for g in grouped.values():
+        g["taxa"] = float(bank_fee)
+        g["valor_final"] = round(g["antes_taxa"] - g["taxa"], 2)
+        g["nome_pagamento"] = g["nomes"][0]
+        if len(set(n.lower() for n in g["nomes"])) > 1:
+            warnings.append(g)
+        if g["valor_final"] <= 0:
+            negatives.append(g)
+        else:
+            valid.append(g)
+
+    valid.sort(key=lambda x: x["valor_final"], reverse=True)
+    return valid, no_iban, invalid_iban, negatives, warnings
+
+
+def split_batches(payments, limit=50000.0, desired_parts=3):
+    if not payments:
+        return []
+    desired_parts = max(1, int(desired_parts or 1))
+    bins = [{"items": [], "total": 0.0} for _ in range(desired_parts)]
+
+    for payment in sorted(payments, key=lambda x: x["valor_final"], reverse=True):
+        candidates = [b for b in bins if b["total"] + payment["valor_final"] <= limit]
+        if not candidates:
+            bins.append({"items": [], "total": 0.0})
+            candidates = [bins[-1]]
+        target = min(candidates, key=lambda b: b["total"])
+        target["items"].append(payment)
+        target["total"] += payment["valor_final"]
+
+    return [b for b in bins if b["items"]]
+
+
+def xml_bytes(batch, group, part, execution_date, debtor_name, debtor_iban, debtor_bic):
+    ns = "urn:iso:std:iso:20022:tech:xsd:pain.001.001.03"
+    ET.register_namespace("", ns)
+    q = lambda tag: f"{{{ns}}}{tag}"
+
+    root = ET.Element(q("Document"))
+    init = ET.SubElement(root, q("CstmrCdtTrfInitn"))
+    grp = ET.SubElement(init, q("GrpHdr"))
+    msg_id = f"{group}-{datetime.now().strftime('%Y%m%d%H%M%S')}-{part}"
+    ET.SubElement(grp, q("MsgId")).text = msg_id
+    ET.SubElement(grp, q("CreDtTm")).text = datetime.now().isoformat(timespec="seconds")
+    ET.SubElement(grp, q("NbOfTxs")).text = str(len(batch["items"]))
+    ET.SubElement(grp, q("CtrlSum")).text = f"{batch['total']:.2f}"
+    init_party = ET.SubElement(grp, q("InitgPty"))
+    ET.SubElement(init_party, q("Nm")).text = debtor_name
+
+    pmt = ET.SubElement(init, q("PmtInf"))
+    ET.SubElement(pmt, q("PmtInfId")).text = msg_id
+    ET.SubElement(pmt, q("PmtMtd")).text = "TRF"
+    ET.SubElement(pmt, q("BtchBookg")).text = "true"
+    ET.SubElement(pmt, q("NbOfTxs")).text = str(len(batch["items"]))
+    ET.SubElement(pmt, q("CtrlSum")).text = f"{batch['total']:.2f}"
+
+    pmt_type = ET.SubElement(pmt, q("PmtTpInf"))
+    svc = ET.SubElement(pmt_type, q("SvcLvl"))
+    ET.SubElement(svc, q("Cd")).text = "SEPA"
+    ET.SubElement(pmt, q("ReqdExctnDt")).text = execution_date
+
+    debtor = ET.SubElement(pmt, q("Dbtr"))
+    ET.SubElement(debtor, q("Nm")).text = debtor_name
+    debtor_acct = ET.SubElement(pmt, q("DbtrAcct"))
+    debtor_id = ET.SubElement(debtor_acct, q("Id"))
+    ET.SubElement(debtor_id, q("IBAN")).text = iban_clean(debtor_iban)
+
+    debtor_agent = ET.SubElement(pmt, q("DbtrAgt"))
+    fin = ET.SubElement(debtor_agent, q("FinInstnId"))
+    ET.SubElement(fin, q("BIC")).text = debtor_bic
+    ET.SubElement(pmt, q("ChrgBr")).text = "SLEV"
+
+    for idx, item in enumerate(batch["items"], 1):
+        tx = ET.SubElement(pmt, q("CdtTrfTxInf"))
+        pmt_id = ET.SubElement(tx, q("PmtId"))
+        ET.SubElement(pmt_id, q("EndToEndId")).text = f"{group}-{part}-{idx}"
+        amt = ET.SubElement(tx, q("Amt"))
+        instd = ET.SubElement(amt, q("InstdAmt"), Ccy="EUR")
+        instd.text = f"{item['valor_final']:.2f}"
+
+        cdtr = ET.SubElement(tx, q("Cdtr"))
+        ET.SubElement(cdtr, q("Nm")).text = item["nome_pagamento"][:70]
+        acct = ET.SubElement(tx, q("CdtrAcct"))
+        acct_id = ET.SubElement(acct, q("Id"))
+        ET.SubElement(acct_id, q("IBAN")).text = item["iban"]
+
+        purpose = ET.SubElement(tx, q("Purp"))
+        ET.SubElement(purpose, q("Cd")).text = "SALA"
+        rem = ET.SubElement(tx, q("RmtInf"))
+        ET.SubElement(rem, q("Ustrd")).text = f"Pagamento {group}"
+
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+@app.route("/descontos-extra", methods=["POST"])
+@login_required
+def descontos_extra():
+    c = db()
+    driver_id = request.form.get("motorista_id")
+    week = request.form.get("semana","").strip()
+    group = request.form.get("grupo","TVDE").strip()
+    category = request.form.get("categoria","Outro").strip()
+    description = request.form.get("descricao","").strip()
+    value = num(request.form.get("valor"))
+    if driver_id and week and value:
+        c.execute("""INSERT INTO descontos_extras(
+            motorista_id,semana,grupo,categoria,descricao,valor,criado_em
+        ) VALUES(?,?,?,?,?,?,?)""",
+        (driver_id,week,group,category,description,value,datetime.now().isoformat(timespec="seconds")))
+        c.commit()
+        flash("Desconto extra adicionado.")
+    else:
+        flash("Preencha motorista, semana e valor.")
+    c.close()
+    return redirect(url_for("pagamentos", semana=week, grupo=group))
+
+
+@app.route("/pagamentos", methods=["GET","POST"])
+@login_required
+def pagamentos():
+    c = db()
+    week = request.values.get("semana","").strip()
+    group = request.values.get("grupo","TVDE").strip()
+    bank_fee = num(request.values.get("taxa","1.25"))
+    parts = int(num(request.values.get("partes","3")) or 3)
+
+    valid = no_iban = invalid_iban = negatives = warnings = []
+    batches = []
+    if week:
+        valid, no_iban, invalid_iban, negatives, warnings = payment_preview(c, week, group, bank_fee)
+        batches = split_batches(valid, 50000.0, parts)
+
+    drivers = c.execute("SELECT id,nome FROM motoristas ORDER BY nome").fetchall()
+    extras = []
+    if week:
+        extras = c.execute("""SELECT d.*,m.nome motorista FROM descontos_extras d
+                              JOIN motoristas m ON m.id=d.motorista_id
+                              WHERE d.semana=? AND d.grupo=? ORDER BY d.id DESC""",
+                           (week,group)).fetchall()
+    c.close()
+
+    body = """
+<div class="card"><h2>Preparar pagamentos XML</h2>
+<form method="get" class="grid">
+<label>Semana<input type="week" name="semana" value="{{week}}" required></label>
+<label>Grupo<select name="grupo"><option value="TVDE" {{'selected' if group=='TVDE' else ''}}>TVDE</option><option value="DELIVERY" {{'selected' if group=='DELIVERY' else ''}}>Uber Eats / Bolt Food</option></select></label>
+<label>Taxa por transferência<input type="number" step="0.01" name="taxa" value="{{bank_fee}}"></label>
+<label>Dividir inicialmente em<input type="number" min="1" name="partes" value="{{parts}}"></label>
+<div style="align-self:end"><button>Simular pagamentos</button></div>
+</form></div>
+
+<div class="card"><h2>Adicionar desconto extra</h2>
+<form method="post" action="/descontos-extra" class="grid">
+<input type="hidden" name="semana" value="{{week}}"><input type="hidden" name="grupo" value="{{group}}">
+<label>Motorista<select name="motorista_id" required><option value="">Selecione</option>{% for d in drivers %}<option value="{{d.id}}">{{d.nome}}</option>{% endfor %}</select></label>
+<label>Categoria<select name="categoria"><option>Combustível extra</option><option>Adiantamento</option><option>Multa</option><option>Renda da viatura</option><option>Outro</option></select></label>
+<label>Descrição<input name="descricao"></label>
+<label>Valor<input type="number" step="0.01" name="valor" required></label>
+<div style="align-self:end"><button>Adicionar desconto</button></div>
+</form></div>
+
+{% if week %}
+<div class="grid">
+<div class="card"><div class="metric-label">Transferências válidas</div><div class="metric-value">{{valid|length}}</div></div>
+<div class="card"><div class="metric-label">Sem IBAN</div><div class="metric-value">{{no_iban|length}}</div></div>
+<div class="card"><div class="metric-label">IBAN inválido</div><div class="metric-value">{{invalid_iban|length}}</div></div>
+<div class="card"><div class="metric-label">Negativos / não pagos</div><div class="metric-value">{{negatives|length}}</div></div>
+<div class="card"><div class="metric-label">XMLs previstos</div><div class="metric-value">{{batches|length}}</div></div>
+</div>
+
+<div class="card"><h2>Divisão prevista</h2>
+<table><tr><th>Parte</th><th>Transferências</th><th>Total</th></tr>
+{% for b in batches %}<tr><td>{{loop.index}}</td><td>{{b.items|length}}</td><td><b>{{money(b.total)}}</b></td></tr>{% endfor %}
+</table>
+{% if valid %}
+<form method="post" action="/gerar-xml" class="grid" style="margin-top:16px">
+<input type="hidden" name="semana" value="{{week}}"><input type="hidden" name="grupo" value="{{group}}">
+<input type="hidden" name="taxa" value="{{bank_fee}}"><input type="hidden" name="partes" value="{{parts}}">
+<label>Data de execução<input type="date" name="data_execucao" required></label>
+<label>Nome da empresa pagadora<input name="debtor_name" required></label>
+<label>IBAN da empresa<input name="debtor_iban" required></label>
+<label>BIC/SWIFT<input name="debtor_bic" required></label>
+<div style="align-self:end"><button class="btn accent">Gerar XMLs em ZIP</button></div>
+</form>
+{% endif %}</div>
+
+<div class="card"><h2>Pagamentos consolidados por IBAN</h2>
+<table><tr><th>Beneficiário</th><th>IBAN</th><th>Bruto</th><th>Combustível</th><th>Extras</th><th>Taxa</th><th>Final</th></tr>
+{% for r in valid %}<tr><td>{{r.nomes|join(', ')}}</td><td>{{r.iban}}</td><td>{{money(r.bruto)}}</td><td>{{money(r.combustivel)}}</td><td>{{money(r.extras)}}</td><td>{{money(r.taxa)}}</td><td><b>{{money(r.valor_final)}}</b></td></tr>{% endfor %}
+</table></div>
+
+<div class="card"><h2>Sem IBAN</h2>
+<table><tr><th>Motorista</th><th>Valor antes da taxa</th></tr>
+{% for r in no_iban %}<tr><td class="warn">{{r.nome}}</td><td>{{money(r.antes_taxa)}}</td></tr>{% endfor %}
+</table></div>
+
+<div class="card"><h2>IBAN inválido</h2>
+<table><tr><th>Motorista</th><th>IBAN</th><th>Valor</th></tr>
+{% for r in invalid_iban %}<tr><td class="bad">{{r.nome}}</td><td>{{r.iban}}</td><td>{{money(r.antes_taxa)}}</td></tr>{% endfor %}
+</table></div>
+
+<div class="card"><h2>Negativos / não pagos</h2>
+<table><tr><th>Motorista(s)</th><th>IBAN</th><th>Valor final</th></tr>
+{% for r in negatives %}<tr><td class="bad">{{r.nomes|join(', ')}}</td><td>{{r.iban}}</td><td>{{money(r.valor_final)}}</td></tr>{% endfor %}
+</table></div>
+
+<div class="card"><h2>Mesmo IBAN com nomes diferentes</h2>
+<table><tr><th>Nomes</th><th>IBAN</th><th>Total</th></tr>
+{% for r in warnings %}<tr><td class="warn">{{r.nomes|join(', ')}}</td><td>{{r.iban}}</td><td>{{money(r.valor_final)}}</td></tr>{% endfor %}
+</table></div>
+
+<div class="card"><h2>Descontos extras lançados</h2>
+<table><tr><th>Motorista</th><th>Categoria</th><th>Descrição</th><th>Valor</th></tr>
+{% for e in extras %}<tr><td>{{e.motorista}}</td><td>{{e.categoria}}</td><td>{{e.descricao}}</td><td>{{money(e.valor)}}</td></tr>{% endfor %}
+</table></div>
+{% endif %}
+"""
+    return render("Pagamentos XML", body, week=week, group=group, bank_fee=bank_fee, parts=parts,
+                  valid=valid, no_iban=no_iban, invalid_iban=invalid_iban, negatives=negatives,
+                  warnings=warnings, batches=batches, drivers=drivers, extras=extras, money=money)
+
+
+@app.route("/gerar-xml", methods=["POST"])
+@login_required
+def gerar_xml():
+    week = request.form.get("semana","").strip()
+    group = request.form.get("grupo","TVDE").strip()
+    bank_fee = num(request.form.get("taxa","1.25"))
+    parts = int(num(request.form.get("partes","3")) or 3)
+    execution_date = request.form.get("data_execucao","").strip()
+    debtor_name = request.form.get("debtor_name","").strip()
+    debtor_iban = request.form.get("debtor_iban","").strip()
+    debtor_bic = request.form.get("debtor_bic","").strip()
+
+    if not all([week,execution_date,debtor_name,debtor_iban,debtor_bic]):
+        flash("Preencha todos os dados da empresa pagadora.")
+        return redirect(url_for("pagamentos",semana=week,grupo=group))
+
+    c = db()
+    valid, no_iban, invalid_iban, negatives, warnings = payment_preview(c, week, group, bank_fee)
+    if no_iban or invalid_iban or warnings:
+        c.close()
+        flash("Existem pendências de IBAN. Corrija antes de gerar os XMLs.")
+        return redirect(url_for("pagamentos",semana=week,grupo=group,taxa=bank_fee,partes=parts))
+
+    batches = split_batches(valid, 50000.0, parts)
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as z:
+        for i,batch in enumerate(batches,1):
+            filename = f"{group}_{week}_PARTE_{i:02d}.xml"
+            content = xml_bytes(batch, group, i, execution_date, debtor_name, debtor_iban, debtor_bic)
+            z.writestr(filename, content)
+            c.execute("""INSERT INTO xml_historico(semana,grupo,arquivo,pagamentos,total,criado_em)
+                         VALUES(?,?,?,?,?,?)""",
+                      (week,group,filename,len(batch["items"]),batch["total"],
+                       datetime.now().isoformat(timespec="seconds")))
+    c.commit()
+    c.close()
+    output.seek(0)
+    return send_file(output,mimetype="application/zip",as_attachment=True,
+                     download_name=f"XML_{group}_{week}.zip")
 
 
 @app.route("/recibos")
