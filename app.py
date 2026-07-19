@@ -125,6 +125,34 @@ def init_db():
       total REAL NOT NULL,
       criado_em TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS pagamentos_consolidados(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      semana TEXT NOT NULL,
+      grupo TEXT NOT NULL,
+      arquivo TEXT NOT NULL,
+      parte INTEGER NOT NULL,
+      iban TEXT NOT NULL,
+      nome_pagamento TEXT NOT NULL,
+      taxa REAL NOT NULL DEFAULT 0,
+      valor_transferido REAL NOT NULL,
+      criado_em TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS pagamentos_consolidados_itens(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pagamento_id INTEGER NOT NULL,
+      motorista_id INTEGER,
+      motorista_nome TEXT NOT NULL,
+      plataforma TEXT,
+      bruto REAL DEFAULT 0,
+      dinheiro_maos REAL DEFAULT 0,
+      comissao REAL DEFAULT 0,
+      combustivel REAL DEFAULT 0,
+      descontos_extras REAL DEFAULT 0,
+      reembolsos REAL DEFAULT 0,
+      valor_liquido REAL DEFAULT 0
+    );
     """)
     cols = [r[1] for r in c.execute("PRAGMA table_info(motoristas)").fetchall()]
     if "cartao_prio" not in cols:
@@ -280,6 +308,7 @@ button,.btn{border:0;border-radius:7px;background:#172033;color:white;padding:10
  <div class="nav">
   <a href="/relatorios">▤ Relatórios</a>
   <a href="/pagamentos">⇄ Pagamentos XML</a>
+  <a href="/auditoria-pagamentos">◎ Auditoria por IBAN</a>
   <a href="/recibos">▧ Recibos</a>
  </div>
  <div class="nav-title">Pendências</div>
@@ -297,7 +326,7 @@ button,.btn{border:0;border-radius:7px;background:#172033;color:white;padding:10
  </header>
  <nav class="mobile-nav">
   <a href="/">Dashboard</a><a href="/motoristas">Motoristas</a><a href="/viaturas">Viaturas</a>
-  <a href="/importar">Importar</a><a href="/combustivel">PRIO</a><a href="/pagamentos">XML</a><a href="/sem-iban">Sem IBAN</a>
+  <a href="/importar">Importar</a><a href="/combustivel">PRIO</a><a href="/pagamentos">XML</a><a href="/auditoria-pagamentos">Auditoria</a><a href="/sem-iban">Sem IBAN</a>
  </nav>
  <main class="content">
   <div class="page-head"><h1>{{ title }}</h1><p>Visão geral da operação</p></div>
@@ -474,6 +503,7 @@ def dashboard():
  <a class="btn primary" href="/importar">⇧ Importar Uber/Bolt</a>
  <a class="btn green" href="/combustivel">⛽ Importar PRIO</a>
  <a class="btn purple" href="/pagamentos">⇄ Simular Pagamentos</a>
+ <a class="btn" href="/auditoria-pagamentos">◎ Auditoria por IBAN</a>
  <a class="btn orange" href="/relatorios">▤ Ver Relatórios</a>
 </div>
 """
@@ -1052,7 +1082,7 @@ def payment_preview(c, week, group, bank_fee):
         key = p["iban"]
         if key not in grouped:
             grouped[key] = {
-                "iban": key, "nomes": [], "motoristas": [],
+                "iban": key, "nomes": [], "motoristas": [], "detalhes": [],
                 "bruto": 0, "dinheiro": 0, "comissao": 0, "portagens": 0,
                 "outros": 0, "reembolsos": 0, "combustivel": 0, "extras": 0,
                 "antes_taxa": 0
@@ -1060,6 +1090,7 @@ def payment_preview(c, week, group, bank_fee):
         g = grouped[key]
         g["nomes"].append(p["nome"])
         g["motoristas"].append(p["motorista_id"])
+        g["detalhes"].append(dict(p))
         for field in ["bruto","dinheiro","comissao","portagens","outros","reembolsos","combustivel","extras","antes_taxa"]:
             g[field] += p[field]
 
@@ -1344,15 +1375,153 @@ def gerar_xml():
             filename = f"{group}_{week}_PARTE_{i:02d}.xml"
             content = xml_bytes(batch, group, i, execution_date, debtor_name, debtor_iban, debtor_bic)
             z.writestr(filename, content)
+            created_at = datetime.now().isoformat(timespec="seconds")
             c.execute("""INSERT INTO xml_historico(semana,grupo,arquivo,pagamentos,total,criado_em)
                          VALUES(?,?,?,?,?,?)""",
-                      (week,group,filename,len(batch["items"]),batch["total"],
-                       datetime.now().isoformat(timespec="seconds")))
+                      (week,group,filename,len(batch["items"]),batch["total"],created_at))
+
+            for payment in batch["items"]:
+                cur = c.execute("""INSERT INTO pagamentos_consolidados(
+                    semana,grupo,arquivo,parte,iban,nome_pagamento,taxa,valor_transferido,criado_em
+                ) VALUES(?,?,?,?,?,?,?,?,?)""",
+                (week,group,filename,i,payment["iban"],payment["nome_pagamento"],
+                 payment["taxa"],payment["valor_final"],created_at))
+                pagamento_id = cur.lastrowid
+
+                detalhes = payment.get("detalhes", [])
+                taxa_rateada = payment["taxa"] / len(detalhes) if detalhes else 0
+                for detail in detalhes:
+                    valor_individual = detail["antes_taxa"] - taxa_rateada
+                    plataformas = c.execute("""SELECT GROUP_CONCAT(DISTINCT plataforma)
+                                               FROM relatorios
+                                               WHERE motorista_id=? AND semana=?
+                                               AND COALESCE(grupo,'TVDE')=?""",
+                                            (detail["motorista_id"],week,group)).fetchone()[0] or ""
+                    c.execute("""INSERT INTO pagamentos_consolidados_itens(
+                        pagamento_id,motorista_id,motorista_nome,plataforma,bruto,dinheiro_maos,
+                        comissao,combustivel,descontos_extras,reembolsos,valor_liquido
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                    (pagamento_id,detail["motorista_id"],detail["nome"],plataformas,
+                     detail["bruto"],detail["dinheiro"],detail["comissao"],
+                     detail["combustivel"],detail["extras"],detail["reembolsos"],
+                     round(valor_individual,2)))
     c.commit()
     c.close()
     output.seek(0)
     return send_file(output,mimetype="application/zip",as_attachment=True,
                      download_name=f"XML_{group}_{week}.zip")
+
+
+
+@app.route("/auditoria-pagamentos")
+@login_required
+def auditoria_pagamentos():
+    c = db()
+    busca = request.args.get("busca","").strip()
+    semana = request.args.get("semana","").strip()
+    grupo = request.args.get("grupo","").strip()
+
+    sql = """SELECT p.*,
+             (SELECT COUNT(*) FROM pagamentos_consolidados_itens i WHERE i.pagamento_id=p.id) itens
+             FROM pagamentos_consolidados p WHERE 1=1"""
+    params = []
+    if busca:
+        sql += """ AND (p.iban LIKE ? OR p.nome_pagamento LIKE ? OR p.arquivo LIKE ?
+                   OR EXISTS(SELECT 1 FROM pagamentos_consolidados_itens i
+                             WHERE i.pagamento_id=p.id AND i.motorista_nome LIKE ?))"""
+        term = f"%{busca}%"
+        params.extend([term,term,term,term])
+    if semana:
+        sql += " AND p.semana=?"
+        params.append(semana)
+    if grupo:
+        sql += " AND p.grupo=?"
+        params.append(grupo)
+    sql += " ORDER BY p.id DESC"
+
+    rows = c.execute(sql, params).fetchall()
+    total = sum(float(r["valor_transferido"] or 0) for r in rows)
+    c.close()
+
+    body = """
+<div class="card">
+ <div class="card-header"><h2>Pesquisar pagamentos consolidados</h2></div>
+ <div class="card-body">
+  <form method="get" class="grid">
+   <label>Nome, IBAN ou XML<input name="busca" value="{{busca}}" placeholder="Pesquisar..."></label>
+   <label>Semana<input type="week" name="semana" value="{{semana}}"></label>
+   <label>Grupo<select name="grupo"><option value="">Todos</option><option value="TVDE" {{'selected' if grupo=='TVDE' else ''}}>TVDE</option><option value="DELIVERY" {{'selected' if grupo=='DELIVERY' else ''}}>Delivery</option></select></label>
+   <div style="align-self:end"><button class="btn primary">Pesquisar</button></div>
+  </form>
+ </div>
+</div>
+
+<div class="kpi-grid" style="grid-template-columns:repeat(3,minmax(180px,1fr))">
+ <div class="kpi blue"><h3>Transferências</h3><div class="value">{{rows|length}}</div><small>Pagamentos encontrados</small></div>
+ <div class="kpi green"><h3>Valor transferido</h3><div class="value">{{money(total)}}</div><small>Total da pesquisa</small></div>
+ <div class="kpi purple"><h3>Composições</h3><div class="value">{{rows|sum(attribute='itens')}}</div><small>Motoristas incluídos</small></div>
+</div>
+
+<div class="card">
+ <div class="card-header"><h2>Pagamentos por IBAN</h2></div>
+ <div class="card-body">
+  <table>
+   <tr><th>Data/hora</th><th>Semana</th><th>Grupo</th><th>Beneficiário</th><th>IBAN</th><th>XML</th><th>Pessoas</th><th>Total</th><th></th></tr>
+   {% for r in rows %}
+   <tr>
+    <td>{{r.criado_em}}</td><td>{{r.semana}}</td><td>{{r.grupo}}</td><td>{{r.nome_pagamento}}</td>
+    <td>{{r.iban}}</td><td>{{r.arquivo}}</td><td>{{r.itens}}</td><td><b>{{money(r.valor_transferido)}}</b></td>
+    <td><a class="btn primary" href="/auditoria-pagamentos/{{r.id}}">Abrir composição</a></td>
+   </tr>
+   {% endfor %}
+  </table>
+ </div>
+</div>
+"""
+    return render("Auditoria de Pagamentos", body, rows=rows, total=total, busca=busca,
+                  semana=semana, grupo=grupo, money=money)
+
+
+@app.route("/auditoria-pagamentos/<int:payment_id>")
+@login_required
+def auditoria_pagamento_detalhe(payment_id):
+    c = db()
+    payment = c.execute("SELECT * FROM pagamentos_consolidados WHERE id=?", (payment_id,)).fetchone()
+    if not payment:
+        c.close()
+        return "Pagamento não encontrado", 404
+
+    items = c.execute("""SELECT * FROM pagamentos_consolidados_itens
+                         WHERE pagamento_id=? ORDER BY motorista_nome""",
+                      (payment_id,)).fetchall()
+    c.close()
+
+    body = """
+<div class="grid">
+ <div class="card"><div class="card-body"><div class="metric-label">IBAN</div><div style="font-size:18px;font-weight:800;margin-top:8px">{{payment.iban}}</div></div></div>
+ <div class="card"><div class="card-body"><div class="metric-label">Valor transferido</div><div class="metric-value">{{money(payment.valor_transferido)}}</div></div></div>
+ <div class="card"><div class="card-body"><div class="metric-label">XML</div><div style="font-weight:800;margin-top:8px">{{payment.arquivo}}</div></div></div>
+ <div class="card"><div class="card-body"><div class="metric-label">Data e hora</div><div style="font-weight:800;margin-top:8px">{{payment.criado_em}}</div></div></div>
+</div>
+
+<div class="card">
+ <div class="card-header"><h2>Composição individual do pagamento</h2></div>
+ <div class="card-body">
+  <table>
+   <tr><th>Motorista</th><th>Plataforma</th><th>Bruto</th><th>Dinheiro</th><th>Comissão</th><th>Combustível</th><th>Extras</th><th>Reembolso</th><th>Líquido individual</th></tr>
+   {% for i in items %}
+   <tr>
+    <td><b>{{i.motorista_nome}}</b></td><td>{{i.plataforma}}</td><td>{{money(i.bruto)}}</td>
+    <td>{{money(i.dinheiro_maos)}}</td><td>{{money(i.comissao)}}</td><td>{{money(i.combustivel)}}</td>
+    <td>{{money(i.descontos_extras)}}</td><td>{{money(i.reembolsos)}}</td><td><b>{{money(i.valor_liquido)}}</b></td>
+   </tr>
+   {% endfor %}
+  </table>
+  <div style="margin-top:16px"><a class="btn" href="/auditoria-pagamentos">Voltar</a></div>
+ </div>
+</div>
+"""
+    return render("Composição do Pagamento", body, payment=payment, items=items, money=money)
 
 
 @app.route("/recibos")
