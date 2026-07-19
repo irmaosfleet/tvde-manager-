@@ -482,6 +482,69 @@ def dashboard():
                   recent=recent, alerts=alerts, fuel_top=fuel_top, xml_recent=xml_recent, money=money)
 
 
+def get_or_create_driver(c, name, email="", phone=""):
+    name = " ".join(str(name or "").split()).strip()
+    if not name:
+        return None
+    found = c.execute("SELECT id FROM motoristas WHERE lower(nome)=lower(?)", (name,)).fetchone()
+    if found:
+        return found["id"]
+    cur = c.execute("INSERT INTO motoristas(nome,email,telefone) VALUES(?,?,?)", (name, email, phone))
+    return cur.lastrowid
+
+
+def import_uber(c, rows, week):
+    count = 0
+    for row in rows:
+        first = row.get("Nome próprio do motorista", "")
+        last = row.get("Apelido do motorista", "")
+        name = " ".join((first + " " + last).split())
+        if not name:
+            continue
+        driver_id = get_or_create_driver(c, name)
+        bruto = num(row.get("Pago a si : Os seus rendimentos : Tarifa"))
+        dinheiro = abs(num(row.get("Pago a si : Saldo da viagem : Pagamentos : Dinheiro recebido")))
+        service = abs(num(row.get("Pago a si:Os seus rendimentos:Taxa de serviço")))
+        tolls = abs(num(row.get("Pago a si:Saldo da viagem:Reembolsos:Portagem")))
+        paid = num(row.get("Pago a si"))
+        earnings = num(row.get("Pago a si : Os seus rendimentos"))
+        liquid = paid if paid else earnings - dinheiro
+        c.execute("""INSERT INTO relatorios(plataforma,motorista_id,semana,bruto,dinheiro_maos,comissao,
+                   portagens,outros_descontos,reembolsos,liquido,criado_em)
+                   VALUES('Uber',?,?,?,?,?,?,?,?,?,?)""",
+                  (driver_id, week, bruto, dinheiro, service, tolls, 0, tolls, liquid,
+                   datetime.now().isoformat(timespec="seconds")))
+        c.execute("UPDATE relatorios SET grupo='TVDE' WHERE id=last_insert_rowid()")
+        count += 1
+    return count
+
+
+def import_bolt(c, rows, week):
+    count = 0
+    for row in rows:
+        name = row.get("Motorista", "")
+        if not name:
+            continue
+        driver_id = get_or_create_driver(c, name, row.get("Email",""), row.get("Telemóvel",""))
+        bruto = num(row.get("Ganhos brutos (total)|€"))
+        dinheiro = abs(num(row.get("Dinheiro recebido|€")))
+        commission = abs(num(row.get("Comissões|€")))
+        tolls = abs(num(row.get("Portagens|€")))
+        other = abs(num(row.get("Outras taxas|€"))) + abs(num(row.get("Reembolsos aos passageiros|€")))
+        reimburse = abs(num(row.get("Reembolsos de despesas|€")))
+        predicted = num(row.get("Pagamento previsto|€"))
+        liquid = predicted if predicted else num(row.get("Ganhos líquidos|€")) - dinheiro
+        c.execute("""INSERT INTO relatorios(plataforma,motorista_id,semana,bruto,dinheiro_maos,comissao,
+                   portagens,outros_descontos,reembolsos,liquido,criado_em)
+                   VALUES('Bolt',?,?,?,?,?,?,?,?,?,?)""",
+                  (driver_id, week, bruto, dinheiro, commission, tolls, other, reimburse, liquid,
+                   datetime.now().isoformat(timespec="seconds")))
+        c.execute("UPDATE relatorios SET grupo='TVDE' WHERE id=last_insert_rowid()")
+        count += 1
+    return count
+
+
+
 @app.route("/importar", methods=["GET","POST"])
 @login_required
 def importar():
