@@ -5,7 +5,7 @@ from flask import (
 )
 from functools import wraps
 from io import BytesIO, StringIO
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import csv
 import hmac
 import os
@@ -14,6 +14,7 @@ import unicodedata
 
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
+from openpyxl import load_workbook
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "troque-esta-chave-no-render")
@@ -76,7 +77,34 @@ def init_db():
       linhas INTEGER DEFAULT 0,
       criado_em TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS combustivel(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      semana TEXT NOT NULL,
+      motorista_id INTEGER,
+      cartao TEXT NOT NULL,
+      descricao_cartao TEXT,
+      data TEXT,
+      posto TEXT,
+      litros REAL DEFAULT 0,
+      total REAL DEFAULT 0,
+      arquivo TEXT,
+      criado_em TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS importacoes_combustivel(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      semana TEXT NOT NULL,
+      arquivo TEXT NOT NULL,
+      lancamentos INTEGER DEFAULT 0,
+      total REAL DEFAULT 0,
+      pendentes INTEGER DEFAULT 0,
+      criado_em TEXT NOT NULL
+    );
     """)
+    cols = [r[1] for r in c.execute("PRAGMA table_info(motoristas)").fetchall()]
+    if "cartao_prio" not in cols:
+        c.execute("ALTER TABLE motoristas ADD COLUMN cartao_prio TEXT")
     c.commit()
     c.close()
 
@@ -176,6 +204,7 @@ button,.btn{border:0;border-radius:10px;background:#111827;color:#fff;padding:11
   <a href="/motoristas">● Motoristas</a>
   <a href="/viaturas">▣ Viaturas</a>
   <a href="/recibos">▤ Recibos</a>
+  <a href="/combustivel">⛽ Combustível</a>
  </nav>
  <div class="logout"><a class="btn secondary" style="width:100%;text-align:center" href="/logout">Sair</a></div>
 </aside>
@@ -183,7 +212,7 @@ button,.btn{border:0;border-radius:10px;background:#111827;color:#fff;padding:11
  <header class="top"><h1>{{ title }}</h1><div class="user">Administrador · Irmãos Fleet</div></header>
  <nav class="mobilebar">
   <a href="/">Dashboard</a><a href="/importar">Importar</a><a href="/relatorios">Relatórios</a>
-  <a href="/motoristas">Motoristas</a><a href="/viaturas">Viaturas</a><a href="/recibos">Recibos</a><a href="/logout">Sair</a>
+  <a href="/motoristas">Motoristas</a><a href="/viaturas">Viaturas</a><a href="/recibos">Recibos</a><a href="/combustivel">Combustível</a><a href="/logout">Sair</a>
  </nav>
  <main class="content">
  {% with messages = get_flashed_messages() %}
@@ -251,6 +280,8 @@ def dashboard():
     }
     totals = c.execute("""SELECT COALESCE(SUM(bruto),0) bruto, COALESCE(SUM(dinheiro_maos),0) dinheiro,
                          COALESCE(SUM(liquido),0) liquido FROM relatorios""").fetchone()
+    fuel_total = c.execute("SELECT COALESCE(SUM(total),0) total FROM combustivel").fetchone()["total"]
+    fuel_pending = c.execute("SELECT COUNT(*) n FROM combustivel WHERE motorista_id IS NULL").fetchone()["n"]
     recent = c.execute("""SELECT r.*,m.nome motorista FROM relatorios r JOIN motoristas m ON m.id=r.motorista_id
                           ORDER BY r.id DESC LIMIT 8""").fetchall()
     alerts = []
@@ -272,6 +303,7 @@ def dashboard():
  <div class="card"><div class="metric-label">Total bruto importado</div><div class="metric-value">{{money(totals.bruto)}}</div></div>
  <div class="card"><div class="metric-label">Dinheiro em mãos</div><div class="metric-value">{{money(totals.dinheiro)}}</div></div>
  <div class="card"><div class="metric-label">Total líquido</div><div class="metric-value">{{money(totals.liquido)}}</div></div>
+ <div class="card"><div class="metric-label">Combustível</div><div class="metric-value">{{money(fuel_total)}}</div><div class="muted">{{fuel_pending}} pendência(s)</div></div>
 </div>
 <div class="grid" style="grid-template-columns:1.4fr 1fr">
  <section class="card"><h2>Relatórios recentes</h2>
@@ -284,7 +316,7 @@ def dashboard():
  {% else %}<p class="muted">Nenhum documento vencendo em 10 dias.</p>{% endif %}</section>
 </div>
 """
-    return render("Dashboard", body, counts=counts, totals=totals, recent=recent, alerts=alerts, money=money)
+    return render("Dashboard", body, counts=counts, totals=totals, recent=recent, alerts=alerts, money=money, fuel_total=fuel_total, fuel_pending=fuel_pending)
 
 
 def get_or_create_driver(c, name, email="", phone=""):
@@ -412,31 +444,41 @@ def relatorios():
     return render("Relatórios", body, rows=rows, money=money)
 
 
+
 @app.route("/motoristas", methods=["GET","POST"])
 @login_required
 def motoristas():
     c = db()
     if request.method == "POST":
         try:
-            c.execute("INSERT INTO motoristas(nome,email,telefone,iban,percentual) VALUES(?,?,?,?,?)",
+            c.execute("""INSERT INTO motoristas(nome,email,telefone,iban,percentual,cartao_prio)
+                         VALUES(?,?,?,?,?,?)""",
                       (request.form["nome"].strip(),request.form.get("email","").strip(),
                        request.form.get("telefone","").strip(),request.form.get("iban","").strip(),
-                       num(request.form.get("percentual"))))
+                       num(request.form.get("percentual")),
+                       request.form.get("cartao_prio","").replace(" ","").strip()))
             c.commit(); flash("Motorista cadastrado.")
         except sqlite3.IntegrityError:
             flash("Esse motorista já está cadastrado.")
         c.close()
         return redirect(url_for("motoristas"))
-    rows = c.execute("SELECT * FROM motoristas ORDER BY nome").fetchall(); c.close()
+    rows = c.execute("SELECT * FROM motoristas ORDER BY nome").fetchall()
+    c.close()
     body = """
 <div class="card"><h2>Novo motorista</h2><form method="post" class="grid">
-<label>Nome<input name="nome" required></label><label>E-mail<input name="email" type="email"></label>
-<label>Telefone<input name="telefone"></label><label>IBAN<input name="iban"></label>
-<label>Percentual (%)<input name="percentual" type="number" step="0.01"></label><div style="align-self:end"><button>Cadastrar</button></div>
+<label>Nome<input name="nome" required></label>
+<label>E-mail<input name="email" type="email"></label>
+<label>Telefone<input name="telefone"></label>
+<label>IBAN<input name="iban"></label>
+<label>Percentual (%)<input name="percentual" type="number" step="0.01"></label>
+<label>Número do cartão PRIO<input name="cartao_prio" inputmode="numeric"></label>
+<div style="align-self:end"><button>Cadastrar</button></div>
 </form></div>
-<div class="card"><h2>Motoristas</h2><table><tr><th>Nome</th><th>E-mail</th><th>Telefone</th><th>IBAN</th><th>%</th></tr>
-{% for r in rows %}<tr><td><b>{{r.nome}}</b></td><td>{{r.email}}</td><td>{{r.telefone}}</td><td>{{r.iban}}</td><td>{{r.percentual}}</td></tr>{% endfor %}
-</table></div>
+<div class="card"><h2>Motoristas</h2>
+<table><tr><th>Nome</th><th>E-mail</th><th>Telefone</th><th>IBAN</th><th>Cartão PRIO</th><th>%</th></tr>
+{% for r in rows %}
+<tr><td><b>{{r.nome}}</b></td><td>{{r.email}}</td><td>{{r.telefone}}</td><td>{{r.iban}}</td><td>{{r.cartao_prio or '-'}}</td><td>{{r.percentual}}</td></tr>
+{% endfor %}</table></div>
 """
     return render("Motoristas", body, rows=rows)
 
@@ -473,6 +515,136 @@ def viaturas():
 </table></div>
 """
     return render("Viaturas", body, rows=rows, drivers=drivers)
+
+
+
+@app.route("/combustivel", methods=["GET","POST"])
+@login_required
+def combustivel():
+    c = db()
+    if request.method == "POST":
+        arquivo = request.files.get("arquivo")
+        semana = request.form.get("semana","").strip()
+        if not arquivo or not arquivo.filename or not semana:
+            c.close()
+            flash("Selecione o relatório PRIO e informe a semana.")
+            return redirect(url_for("combustivel"))
+
+        try:
+            wb = load_workbook(BytesIO(arquivo.read()), data_only=True, read_only=True)
+            ws = wb.active
+            rows = list(ws.iter_rows(values_only=True))
+
+            header_index = None
+            headers = None
+            for i, row in enumerate(rows):
+                normalized = [str(v or "").strip().upper() for v in row]
+                if "CARTÃO" in normalized and "TOTAL" in normalized:
+                    header_index = i
+                    headers = normalized
+                    break
+
+            if header_index is None:
+                raise ValueError("Não encontrei as colunas CARTÃO e TOTAL.")
+
+            idx = {name: pos for pos, name in enumerate(headers)}
+            inserted = pending = 0
+            total_imported = 0.0
+
+            for row in rows[header_index + 1:]:
+                if not row or not any(v is not None and str(v).strip() for v in row):
+                    continue
+
+                card = str(row[idx["CARTÃO"]] or "").strip()
+                if card.endswith(".0"):
+                    card = card[:-2]
+                card = card.replace(" ", "")
+                if not card:
+                    continue
+
+                total_value = num(row[idx["TOTAL"]])
+                if total_value == 0:
+                    continue
+
+                driver = c.execute(
+                    "SELECT id FROM motoristas WHERE REPLACE(COALESCE(cartao_prio,''),' ','')=?",
+                    (card,)
+                ).fetchone()
+                driver_id = driver["id"] if driver else None
+                if driver_id is None:
+                    pending += 1
+
+                desc = str(row[idx["DESC. CARTÃO"]] or "") if "DESC. CARTÃO" in idx else ""
+                posto = str(row[idx["POSTO"]] or "") if "POSTO" in idx else ""
+                litros = num(row[idx["LITROS"]]) if "LITROS" in idx else 0
+                data_value = str(row[idx["DATA"]] or "") if "DATA" in idx else ""
+
+                c.execute("""INSERT INTO combustivel(
+                    semana,motorista_id,cartao,descricao_cartao,data,posto,litros,total,arquivo,criado_em
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (semana,driver_id,card,desc,data_value,posto,litros,total_value,
+                 arquivo.filename,datetime.now().isoformat(timespec="seconds")))
+
+                inserted += 1
+                total_imported += total_value
+
+            c.execute("""INSERT INTO importacoes_combustivel(
+                semana,arquivo,lancamentos,total,pendentes,criado_em
+            ) VALUES(?,?,?,?,?,?)""",
+            (semana,arquivo.filename,inserted,total_imported,pending,
+             datetime.now().isoformat(timespec="seconds")))
+            c.commit()
+            flash(f"PRIO importado: {inserted} lançamentos, {money(total_imported)} e {pending} pendência(s).")
+        except Exception as exc:
+            c.rollback()
+            flash(f"Não foi possível importar o relatório: {exc}")
+
+        c.close()
+        return redirect(url_for("combustivel"))
+
+    summary = c.execute("""SELECT semana,COUNT(*) lancamentos,SUM(total) total,
+                           SUM(CASE WHEN motorista_id IS NULL THEN 1 ELSE 0 END) pendentes
+                           FROM combustivel GROUP BY semana ORDER BY semana DESC""").fetchall()
+    by_driver = c.execute("""SELECT f.semana,m.nome motorista,m.cartao_prio,
+                            COUNT(*) abastecimentos,SUM(f.litros) litros,SUM(f.total) total
+                            FROM combustivel f
+                            JOIN motoristas m ON m.id=f.motorista_id
+                            GROUP BY f.semana,m.id
+                            ORDER BY f.semana DESC,total DESC""").fetchall()
+    pending_rows = c.execute("""SELECT * FROM combustivel WHERE motorista_id IS NULL
+                                ORDER BY id DESC""").fetchall()
+    c.close()
+
+    body = """
+<div class="card"><h2>Importar relatório PRIO</h2>
+<p class="muted">O sistema identifica o motorista pelo número do cartão e usa sempre a coluna <b>TOTAL</b>.</p>
+<form method="post" enctype="multipart/form-data" class="grid">
+<label>Semana<input type="week" name="semana" required></label>
+<label class="filebox">Arquivo Excel PRIO<input type="file" name="arquivo" accept=".xlsx" required></label>
+<div style="align-self:end"><button class="btn accent">Importar combustível</button></div>
+</form></div>
+
+<div class="card"><h2>Resumo por semana</h2>
+<table><tr><th>Semana</th><th>Lançamentos</th><th>Total</th><th>Pendências</th></tr>
+{% for s in summary %}
+<tr><td>{{s.semana}}</td><td>{{s.lancamentos}}</td><td><b>{{money(s.total)}}</b></td><td>{{s.pendentes}}</td></tr>
+{% endfor %}</table></div>
+
+<div class="card"><h2>Combustível por motorista</h2>
+<table><tr><th>Semana</th><th>Motorista</th><th>Cartão</th><th>Abastecimentos</th><th>Litros</th><th>Total</th></tr>
+{% for r in by_driver %}
+<tr><td>{{r.semana}}</td><td>{{r.motorista}}</td><td>{{r.cartao_prio}}</td><td>{{r.abastecimentos}}</td><td>{{"%.2f"|format(r.litros or 0)}}</td><td><b>{{money(r.total)}}</b></td></tr>
+{% endfor %}</table></div>
+
+<div class="card"><h2>Cartões não identificados</h2>
+{% if pending_rows %}
+<table><tr><th>Semana</th><th>Cartão</th><th>Descrição</th><th>Data</th><th>Total</th></tr>
+{% for r in pending_rows %}
+<tr><td>{{r.semana}}</td><td class="warn">{{r.cartao}}</td><td>{{r.descricao_cartao}}</td><td>{{r.data}}</td><td>{{money(r.total)}}</td></tr>
+{% endfor %}</table>
+{% else %}<p class="muted">Nenhuma pendência.</p>{% endif %}</div>
+"""
+    return render("Combustível", body, summary=summary, by_driver=by_driver, pending_rows=pending_rows, money=money)
 
 
 @app.route("/recibos")
