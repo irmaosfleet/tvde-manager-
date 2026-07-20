@@ -359,6 +359,7 @@ button,.btn{border:0;border-radius:10px;background:#172033;color:white;padding:1
 .filebox{border:2px dashed #c6cfdb;border-radius:8px;padding:14px;background:#fafcff}
 .progress{height:8px;background:#edf1f6;border-radius:999px;overflow:hidden}.progress span{display:block;height:100%;background:#2477e8}
 .quick-actions{background:linear-gradient(90deg,#eef6ff,#f8fbff);border:1px solid #cfe0f4;border-radius:8px;padding:14px;display:flex;gap:10px;flex-wrap:wrap}
+.app-footer{margin-top:34px;padding:18px 4px 4px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--muted);font-size:11px}.app-footer strong{color:var(--text)}
 @media(max-width:1180px){.kpi-grid{grid-template-columns:repeat(3,1fr)}.dashboard-grid,.dashboard-grid.bottom{grid-template-columns:1fr}}
 @media(max-width:820px){
  .app-shell{display:block}.sidebar{display:none}.topbar{padding:0 12px}.week-chip{display:none}
@@ -367,7 +368,7 @@ button,.btn{border:0;border-radius:10px;background:#172033;color:white;padding:1
  .content{padding:16px}.content::before{left:0;top:110px;background-size:82vw;opacity:.025}.kpi-grid{grid-template-columns:repeat(2,1fr)}
  table{display:block;overflow-x:auto;white-space:nowrap}
 }
-@media(max-width:520px){.kpi-grid{grid-template-columns:1fr}.topbar-right{gap:8px}}
+@media(max-width:520px){.kpi-grid{grid-template-columns:1fr}.topbar-right{gap:8px}.app-footer{align-items:flex-start;flex-direction:column}}
 </style>
 </head>
 <body>
@@ -402,7 +403,7 @@ button,.btn{border:0;border-radius:10px;background:#172033;color:white;padding:1
  </div>
  <div class="nav-title">Conta</div>
  <div class="nav"><a href="/logout">↗ Sair</a></div>
- <div class="version">Versão 2.1.2 · Interface Premium</div>
+ <div class="version">Plataforma Irmãos Fleet 3.0.0</div>
 </aside>
 <section class="main">
  <header class="topbar">
@@ -419,6 +420,7 @@ button,.btn{border:0;border-radius:10px;background:#172033;color:white;padding:1
   {% for m in messages %}<div class="flash">{{m}}</div>{% endfor %}
   {% endwith %}
   {{ body|safe }}
+  <footer class="app-footer"><span><strong>Plataforma Irmãos Fleet 3.0.0</strong> · Desenvolvido para gestão de frotas TVDE</span><span>IRMÃOS FLEET</span></footer>
  </main>
 </section>
 </div>
@@ -668,7 +670,7 @@ def import_uber(c, rows, week, filename="", group="TVDE"):
         liquid = paid if paid else earnings - dinheiro
         c.execute("""INSERT INTO relatorios(plataforma,motorista_id,semana,bruto,dinheiro_maos,comissao,
                    portagens,outros_descontos,reembolsos,liquido,criado_em,grupo,arquivo)
-                   VALUES('Uber',?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES('Uber',?,?,?,?,?,?,?,?,?,?,?,?)""",
                   (driver_id, week, bruto, dinheiro, service, tolls, 0, tolls, liquid,
                    datetime.now().isoformat(timespec="seconds"), group, filename))
         if group == "DELIVERY":
@@ -696,7 +698,7 @@ def import_bolt(c, rows, week, filename="", group="TVDE"):
         liquid = predicted if predicted else num(_row_value(row, "Ganhos líquidos|€", "Ganhos líquidos")) - dinheiro
         c.execute("""INSERT INTO relatorios(plataforma,motorista_id,semana,bruto,dinheiro_maos,comissao,
                    portagens,outros_descontos,reembolsos,liquido,criado_em,grupo,arquivo)
-                   VALUES('Bolt',?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES('Bolt',?,?,?,?,?,?,?,?,?,?,?,?)""",
                   (driver_id, week, bruto, dinheiro, commission, tolls, other, reimburse, liquid,
                    datetime.now().isoformat(timespec="seconds"), group, filename))
         if group == "DELIVERY":
