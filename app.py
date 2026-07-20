@@ -203,6 +203,8 @@ def init_db():
     report_cols = [r[1] for r in c.execute("PRAGMA table_info(relatorios)").fetchall()]
     if "grupo" not in report_cols:
         c.execute("ALTER TABLE relatorios ADD COLUMN grupo TEXT DEFAULT 'TVDE'")
+    if "arquivo" not in report_cols:
+        c.execute("ALTER TABLE relatorios ADD COLUMN arquivo TEXT")
 
     driver_cols = [r[1] for r in c.execute("PRAGMA table_info(motoristas)").fetchall()]
     extra_driver_cols = {
@@ -298,7 +300,7 @@ BASE = """
  --red:#e84566;--ok:#067647;--warn:#b54708;--bad:#b42318
 }
 *{box-sizing:border-box}
-body{margin:0;font-family:Inter,Arial,sans-serif;background:var(--bg);color:var(--text)}
+body{margin:0;font-family:Inter,Arial,sans-serif;background:#ffffff;color:var(--text)}
 .app-shell{display:grid;grid-template-columns:245px minmax(0,1fr);min-height:100vh}
 .sidebar{background:linear-gradient(180deg,var(--sidebar),var(--sidebar2));color:white;padding:18px 14px;position:sticky;top:0;height:100vh;overflow-y:auto}
 .brand{display:flex;gap:10px;align-items:center;padding:4px 6px 20px}
@@ -311,19 +313,20 @@ body{margin:0;font-family:Inter,Arial,sans-serif;background:var(--bg);color:var(
 .nav a:hover,.nav a.active{background:linear-gradient(90deg,#2276e8,#2d82ed);color:white}
 .nav .badge{margin-left:auto;background:#ff8a00;color:white;border-radius:7px;padding:2px 7px;font-size:11px}
 .version{position:sticky;top:calc(100vh - 42px);padding:16px 8px 2px;color:#9cacbf;font-size:11px}
-.main{min-width:0}
-.topbar{height:64px;background:white;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 20px;position:sticky;top:0;z-index:10}
+.main{min-width:0;background:#fff;position:relative;isolation:isolate}
+.topbar{height:68px;background:rgba(255,255,255,.94);backdrop-filter:blur(12px);border-bottom:1px solid #e8edf4;display:flex;align-items:center;justify-content:space-between;padding:0 24px;position:sticky;top:0;z-index:10;box-shadow:0 3px 14px rgba(15,23,42,.04)}
 .topbar-left{display:flex;align-items:center;gap:14px}
 .menu-toggle{border:0;background:transparent;font-size:22px;color:var(--text);padding:6px}
 .topbar-right{display:flex;align-items:center;gap:18px;color:var(--text);font-size:13px}
 .week-chip{border:1px solid var(--line);border-radius:8px;padding:9px 12px;background:white}
 .mobile-nav{display:none}
-.content{max-width:1450px;margin:auto;padding:22px}
-.page-head{margin-bottom:18px}
-.page-head h1{margin:0;font-size:24px}
+.content{max-width:1450px;margin:auto;padding:28px;position:relative;z-index:1;min-height:calc(100vh - 68px)}
+.content::before{content:"";position:fixed;left:245px;right:0;top:68px;bottom:0;background-image:url('{{ logo_data_uri }}');background-repeat:no-repeat;background-position:center 58%;background-size:min(52vw,620px);opacity:.035;filter:grayscale(1);pointer-events:none;z-index:-1}
+.page-head{margin-bottom:22px;padding:4px 2px}
+.page-head h1{margin:0;font-size:28px;letter-spacing:-.5px}
 .page-head p{margin:5px 0 0;color:var(--muted);font-size:13px}
 .kpi-grid{display:grid;grid-template-columns:repeat(6,minmax(150px,1fr));gap:14px;margin-bottom:18px}
-.kpi{border-radius:8px;padding:17px;color:white;min-height:132px;position:relative;overflow:hidden}
+.kpi{border-radius:16px;padding:19px;color:white;min-height:136px;position:relative;overflow:hidden;box-shadow:0 12px 26px rgba(15,23,42,.12)}
 .kpi h3{margin:0;font-size:13px;font-weight:650}.kpi .value{font-size:22px;font-weight:850;margin:12px 0}
 .kpi small{display:block;color:#ffffffdc;line-height:1.7}.kpi .icon{position:absolute;right:16px;top:45px;font-size:30px;opacity:.75}
 .kpi.green{background:linear-gradient(135deg,#0d9b64,#17b277)}
@@ -335,7 +338,7 @@ body{margin:0;font-family:Inter,Arial,sans-serif;background:var(--bg);color:var(
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
 .dashboard-grid{display:grid;grid-template-columns:1.2fr 1fr .8fr;gap:14px;margin-bottom:14px}
 .dashboard-grid.bottom{grid-template-columns:1fr .9fr 1fr}
-.card{background:var(--surface);border:1px solid var(--line);border-radius:8px;margin-bottom:14px;overflow:hidden}
+.card{background:rgba(255,255,255,.94);border:1px solid #e6ebf2;border-radius:16px;margin-bottom:16px;overflow:hidden;box-shadow:0 10px 28px rgba(15,23,42,.06);backdrop-filter:blur(5px);transition:transform .18s ease,box-shadow .18s ease}.card:hover{transform:translateY(-1px);box-shadow:0 14px 34px rgba(15,23,42,.08)}
 .card-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line)}
 .card-header h2,.card h2{font-size:14px;margin:0}
 .card-body{padding:15px}
@@ -345,8 +348,8 @@ body{margin:0;font-family:Inter,Arial,sans-serif;background:var(--bg);color:var(
 table{width:100%;border-collapse:collapse}th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;font-size:12px}
 th{font-size:10px;text-transform:uppercase;color:var(--muted);background:#fbfcfe}
 label{display:block;font-size:12px;font-weight:750;color:#344054}
-input,select{width:100%;padding:10px;border:1px solid #cfd6e1;border-radius:7px;background:white;margin-top:6px}
-button,.btn{border:0;border-radius:7px;background:#172033;color:white;padding:10px 14px;text-decoration:none;display:inline-block;font-weight:750;cursor:pointer;font-size:12px}
+input,select{width:100%;padding:11px;border:1px solid #cfd6e1;border-radius:10px;background:white;margin-top:6px}
+button,.btn{border:0;border-radius:10px;background:#172033;color:white;padding:10px 14px;text-decoration:none;display:inline-block;font-weight:750;cursor:pointer;font-size:12px}
 .btn.primary{background:#2477e8}.btn.green{background:#12a36d}.btn.purple{background:#7557d9}.btn.orange{background:#ef7d00;color:white}
 .actions{display:flex;gap:8px;flex-wrap:wrap}
 .flash{background:#ecfdf3;border:1px solid #abefc6;padding:11px;border-radius:7px;margin-bottom:14px}
@@ -361,7 +364,7 @@ button,.btn{border:0;border-radius:7px;background:#172033;color:white;padding:10
  .app-shell{display:block}.sidebar{display:none}.topbar{padding:0 12px}.week-chip{display:none}
  .mobile-nav{display:flex;gap:7px;overflow-x:auto;padding:9px;background:#0d1b2f;position:sticky;top:64px;z-index:9}
  .mobile-nav a{white-space:nowrap;color:white;text-decoration:none;background:#ffffff13;padding:8px 10px;border-radius:7px;font-size:12px}
- .content{padding:13px}.kpi-grid{grid-template-columns:repeat(2,1fr)}
+ .content{padding:16px}.content::before{left:0;top:110px;background-size:82vw;opacity:.025}.kpi-grid{grid-template-columns:repeat(2,1fr)}
  table{display:block;overflow-x:auto;white-space:nowrap}
 }
 @media(max-width:520px){.kpi-grid{grid-template-columns:1fr}.topbar-right{gap:8px}}
@@ -399,7 +402,7 @@ button,.btn{border:0;border-radius:7px;background:#172033;color:white;padding:10
  </div>
  <div class="nav-title">Conta</div>
  <div class="nav"><a href="/logout">↗ Sair</a></div>
- <div class="version">Versão 2.0 · Base de Produção</div>
+ <div class="version">Versão 2.1.2 · Interface Premium</div>
 </aside>
 <section class="main">
  <header class="topbar">
@@ -625,59 +628,86 @@ def get_or_create_driver(c, name, email="", phone="", external_id=""):
     return cur.lastrowid
 
 
-def import_uber(c, rows, week):
+def _row_value(row, *candidates):
+    normalized = {norm(k).replace(" ", ""): v for k, v in row.items() if k is not None}
+    for candidate in candidates:
+        key = norm(candidate).replace(" ", "")
+        if key in normalized and normalized[key] not in (None, ""):
+            return normalized[key]
+    return ""
+
+
+def import_uber(c, rows, week, filename="", group="TVDE"):
     count = 0
     for row in rows:
-        first = row.get("Nome próprio do motorista", "")
-        last = row.get("Apelido do motorista", "")
-        name = " ".join((first + " " + last).split())
+        first = _row_value(row, "Nome próprio do motorista", "Nome do motorista", "Primeiro nome", "Driver first name")
+        last = _row_value(row, "Apelido do motorista", "Sobrenome do motorista", "Último nome", "Driver last name")
+        full = _row_value(row, "Motorista", "Nome completo do motorista", "Driver name", "Nome do estafeta", "Courier name")
+        name = " ".join(str(full or (str(first) + " " + str(last))).split())
         if not name:
             continue
-        driver_id = get_or_create_driver(c, name, external_id=row.get("UUID do motorista",""))
-        bruto = num(row.get("Pago a si : Os seus rendimentos : Tarifa"))
-        dinheiro = abs(num(row.get("Pago a si : Saldo da viagem : Pagamentos : Dinheiro recebido")))
-        service = abs(num(row.get("Pago a si:Os seus rendimentos:Taxa de serviço")))
-        tolls = abs(num(row.get("Pago a si:Saldo da viagem:Reembolsos:Portagem")))
-        paid = num(row.get("Pago a si"))
-        earnings = num(row.get("Pago a si : Os seus rendimentos"))
+        external = _row_value(row, "UUID do motorista", "UUID do estafeta", "Driver UUID", "Courier UUID", "ID do motorista", "ID do estafeta")
+        driver_id = get_or_create_driver(c, name, external_id=external)
+        bruto = num(_row_value(row,
+            "Pago a si : Os seus rendimentos : Tarifa", "Pago a si:Os seus rendimentos:Tarifa",
+            "Os seus rendimentos : Tarifa", "Tarifa", "Ganhos brutos", "Total earnings"))
+        dinheiro = abs(num(_row_value(row,
+            "Pago a si : Saldo da viagem : Pagamentos : Dinheiro recebido",
+            "Pago a si:Saldo da viagem:Pagamentos:Dinheiro recebido",
+            "Dinheiro recebido", "Cash collected")))
+        service = abs(num(_row_value(row,
+            "Pago a si:Os seus rendimentos:Taxa de serviço",
+            "Pago a si : Os seus rendimentos : Taxa de serviço",
+            "Taxa de serviço", "Uber service fee", "Service fee")))
+        tolls = abs(num(_row_value(row,
+            "Pago a si:Saldo da viagem:Reembolsos:Portagem",
+            "Pago a si : Saldo da viagem : Reembolsos : Portagem",
+            "Portagem", "Portagens", "Tolls")))
+        paid = num(_row_value(row, "Pago a si", "Pagamento", "Valor pago", "Payout", "Net payout"))
+        earnings = num(_row_value(row, "Pago a si : Os seus rendimentos", "Os seus rendimentos", "Total earnings", "Ganhos líquidos"))
         liquid = paid if paid else earnings - dinheiro
         c.execute("""INSERT INTO relatorios(plataforma,motorista_id,semana,bruto,dinheiro_maos,comissao,
-                   portagens,outros_descontos,reembolsos,liquido,criado_em)
-                   VALUES('Uber',?,?,?,?,?,?,?,?,?,?)""",
+                   portagens,outros_descontos,reembolsos,liquido,criado_em,grupo,arquivo)
+                   VALUES('Uber',?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                   (driver_id, week, bruto, dinheiro, service, tolls, 0, tolls, liquid,
-                   datetime.now().isoformat(timespec="seconds")))
-        c.execute("UPDATE relatorios SET grupo='TVDE' WHERE id=last_insert_rowid()")
+                   datetime.now().isoformat(timespec="seconds"), group, filename))
+        if group == "DELIVERY":
+            c.execute("UPDATE motoristas SET operacao='DELIVERY' WHERE id=?", (driver_id,))
         count += 1
     return count
 
 
-def import_bolt(c, rows, week):
+def import_bolt(c, rows, week, filename="", group="TVDE"):
     count = 0
     for row in rows:
-        name = row.get("Motorista", "")
+        name = _row_value(row, "Motorista", "Estafeta", "Courier", "Nome")
         if not name:
             continue
-        driver_id = get_or_create_driver(c, name, row.get("Email",""), row.get("Telemóvel",""), row.get("Telemóvel","") or row.get("Email",""))
-        bruto = num(row.get("Ganhos brutos (total)|€"))
-        dinheiro = abs(num(row.get("Dinheiro recebido|€")))
-        commission = abs(num(row.get("Comissões|€")))
-        tolls = abs(num(row.get("Portagens|€")))
-        other = abs(num(row.get("Outras taxas|€"))) + abs(num(row.get("Reembolsos aos passageiros|€")))
-        reimburse = abs(num(row.get("Reembolsos de despesas|€")))
-        predicted = num(row.get("Pagamento previsto|€"))
-        liquid = predicted if predicted else num(row.get("Ganhos líquidos|€")) - dinheiro
+        email = _row_value(row, "Email", "E-mail")
+        phone = _row_value(row, "Telemóvel", "Telefone", "Phone")
+        driver_id = get_or_create_driver(c, name, email, phone, phone or email)
+        bruto = num(_row_value(row, "Ganhos brutos (total)|€", "Ganhos brutos", "Total bruto"))
+        dinheiro = abs(num(_row_value(row, "Dinheiro recebido|€", "Dinheiro recebido")))
+        commission = abs(num(_row_value(row, "Comissões|€", "Comissões", "Comissão")))
+        tolls = abs(num(_row_value(row, "Portagens|€", "Portagens")))
+        other = abs(num(_row_value(row, "Outras taxas|€", "Outras taxas"))) + abs(num(_row_value(row, "Reembolsos aos passageiros|€", "Reembolsos aos passageiros")))
+        reimburse = abs(num(_row_value(row, "Reembolsos de despesas|€", "Reembolsos de despesas")))
+        predicted = num(_row_value(row, "Pagamento previsto|€", "Pagamento previsto"))
+        liquid = predicted if predicted else num(_row_value(row, "Ganhos líquidos|€", "Ganhos líquidos")) - dinheiro
         c.execute("""INSERT INTO relatorios(plataforma,motorista_id,semana,bruto,dinheiro_maos,comissao,
-                   portagens,outros_descontos,reembolsos,liquido,criado_em)
-                   VALUES('Bolt',?,?,?,?,?,?,?,?,?,?)""",
+                   portagens,outros_descontos,reembolsos,liquido,criado_em,grupo,arquivo)
+                   VALUES('Bolt',?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                   (driver_id, week, bruto, dinheiro, commission, tolls, other, reimburse, liquid,
-                   datetime.now().isoformat(timespec="seconds")))
-        c.execute("UPDATE relatorios SET grupo='TVDE' WHERE id=last_insert_rowid()")
+                   datetime.now().isoformat(timespec="seconds"), group, filename))
+        if group == "DELIVERY":
+            c.execute("UPDATE motoristas SET operacao='DELIVERY' WHERE id=?", (driver_id,))
         count += 1
     return count
-
 
 
 def import_prio_workbook(c, arquivo, semana):
+    c.execute("DELETE FROM combustivel WHERE semana=? AND arquivo=?", (semana, arquivo.filename))
+    c.execute("DELETE FROM importacoes_combustivel WHERE semana=? AND arquivo=?", (semana, arquivo.filename))
     wb = load_workbook(BytesIO(arquivo.read()), data_only=True, read_only=True)
     ws = wb.active
     rows = list(ws.iter_rows(values_only=True))
@@ -738,19 +768,50 @@ def importar():
         c = db()
         messages=[]
         try:
+            cleaned_categories = set()
             for f in csv_files:
-                raw = f.read().decode("utf-8-sig", errors="replace")
-                rows = list(csv.DictReader(StringIO(raw)))
-                headers = set(rows[0].keys()) if rows else set()
-                if "UUID do motorista" in headers:
-                    platform="Uber"; qty=import_uber(c,rows,week)
-                elif "Motorista" in headers and "Ganhos brutos (total)|€" in headers:
-                    platform="Bolt"; qty=import_bolt(c,rows,week)
+                data = f.read()
+                raw = None
+                for encoding in ("utf-8-sig", "utf-16", "cp1252", "latin-1"):
+                    try:
+                        raw = data.decode(encoding)
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                if raw is None:
+                    raw = data.decode("utf-8-sig", errors="replace")
+                sample = raw[:10000]
+                try:
+                    dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+                    delimiter = dialect.delimiter
+                except csv.Error:
+                    delimiter = ";" if sample.count(";") > sample.count(",") else ","
+                rows = list(csv.DictReader(StringIO(raw), delimiter=delimiter))
+                headers_norm = {norm(k or "") for k in (rows[0].keys() if rows else [])}
+                filename_norm = norm(f.filename)
+                is_delivery = any(x in filename_norm for x in ("eats", "delivery", "food", "estafeta", "courier")) or any(
+                    any(x in h for x in ("estafeta", "courier", "entrega", "delivery")) for h in headers_norm
+                )
+                group = "DELIVERY" if is_delivery else "TVDE"
+                is_uber = ("uber" in filename_norm or any("uuid do motorista" in h or "uuid do estafeta" in h for h in headers_norm)
+                           or any("pago a si" in h for h in headers_norm))
+                is_bolt = ("bolt" in filename_norm or any("ganhos brutos" in h for h in headers_norm))
+                if is_uber:
+                    platform="Uber"
+                elif is_bolt:
+                    platform="Bolt"
                 else:
-                    raise ValueError(f"Formato não reconhecido em {f.filename}.")
+                    raise ValueError(f"Formato não reconhecido em {f.filename}. Verifique se é CSV exportado da Uber, Uber Eats, Bolt ou Bolt Food.")
+                category=(platform, group)
+                if category not in cleaned_categories:
+                    c.execute("DELETE FROM relatorios WHERE plataforma=? AND semana=? AND COALESCE(grupo,'TVDE')=?", (platform, week, group))
+                    c.execute("DELETE FROM importacoes WHERE plataforma=? AND semana=?", (platform, week))
+                    cleaned_categories.add(category)
+                qty = import_uber(c, rows, week, f.filename, group) if platform == "Uber" else import_bolt(c, rows, week, f.filename, group)
                 c.execute("INSERT INTO importacoes(plataforma,semana,arquivo,linhas,criado_em) VALUES(?,?,?,?,?)",
                           (platform,week,f.filename,qty,datetime.now().isoformat(timespec="seconds")))
-                messages.append(f"{platform}: {qty} motoristas")
+                label = "Uber Eats" if platform == "Uber" and group == "DELIVERY" else ("Bolt Food" if platform == "Bolt" and group == "DELIVERY" else platform)
+                messages.append(f"{label}: {qty} motoristas")
             for f in prio_files:
                 inserted,total,pending=import_prio_workbook(c,f,week)
                 messages.append(f"PRIO: {inserted} lançamentos, {money(total)}, {pending} pendência(s)")
