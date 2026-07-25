@@ -1,23 +1,11 @@
-# FleetFlow 1.0.3 — Correção do fechamento
+# FleetFlow 1.0.7
 
-Esta versão corrige o erro 500 ao clicar em **Processar semana**.
+Correções:
+- Dinheiro em mãos da Uber Eats tratado pelo valor absoluto, pois o CSV costuma trazer esse campo negativo.
+- O dinheiro entra na base da comissão e é abatido integralmente no pagamento final.
+- Operações TVDE não recebem regra de dinheiro em mãos.
+- Menu Parceiros visível, com Excel separado por parceiro.
+- Relatório de parceiro inclui motoristas, origens, valores e comissão do parceiro.
 
-Principais mudanças:
-- cálculo protegido contra linhas incompletas;
-- conversão segura de valores e percentuais;
-- taxa de 1,25 aplicada uma vez por IBAN AZUL;
-- mensagem do erro exibida na própria página;
-- fechamento marcado como ERRO no histórico quando houver falha;
-- não depende de pastas templates/static.
-
-## Render
-Build: `pip install -r requirements.txt`
-Start: `gunicorn app:app --workers 1 --threads 4 --timeout 180`
-
-Login inicial: `admin` / `admin123` (altere no Render).
-
-## Versão 1.0.6
-- Corrige `UNIQUE constraint failed: imports.sha256`.
-- A assinatura de duplicidade passa a usar nome do arquivo + conteúdo.
-- Arquivos com conteúdos iguais e nomes diferentes são aceitos.
-- Reimportação do mesmo nome com o mesmo conteúdo é ignorada sem erro 500.
+Após atualizar no GitHub, use no Render: **Manual Deploy → Clear build cache & deploy**.
+Depois limpe a semana importada e importe os relatórios novamente, para os valores de dinheiro serem normalizados.
