@@ -43,7 +43,7 @@ app.jinja_loader.mapping["partners.html"] = """{% extends 'base.html' %}{% block
 app.secret_key = os.getenv("SECRET_KEY", "troque-esta-chave-em-producao")
 app.config["MAX_CONTENT_LENGTH"] = 80 * 1024 * 1024
 COMPANY_NAME = os.getenv("COMPANY_NAME", "Irmãos Fleet")
-APP_VERSION = "1.0.9"
+APP_VERSION = "1.0.10"
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
@@ -64,6 +64,22 @@ def norm(v: Any) -> str:
 
 def clean_identifier(v: Any) -> str:
     return re.sub(r"[^A-Z0-9@.+_-]", "", norm(v))
+
+
+def clean_card_number(v: Any) -> str:
+    """Normaliza cartões PRIO e do banco para o mesmo formato numérico."""
+    if v is None:
+        return ""
+    s = str(v).strip().replace("'", "")
+    # Excel pode devolver cartões numéricos como 7824... .0 ou notação científica.
+    if re.fullmatch(r"\d+\.0", s):
+        s = s[:-2]
+    elif re.fullmatch(r"[+-]?\d+(?:\.\d+)?[Ee][+-]?\d+", s):
+        try:
+            s = format(float(s), ".0f")
+        except ValueError:
+            pass
+    return re.sub(r"\D", "", s)
 
 
 def money(v: Any) -> float:
@@ -360,20 +376,51 @@ def process_report_file(path: Path, import_id: int) -> tuple[int, str]:
 
 
 def process_fuel_file(path: Path, import_id: int) -> tuple[int, str]:
-    df = pd.read_excel(path, dtype=str).fillna("")
-    cols = list(df.columns)
-    card_col = next((c for c in cols if "CART" in norm(c) or "PAN" in norm(c)), cols[0] if cols else None)
-    amount_col = next((c for c in cols if any(x in norm(c) for x in ("VALOR", "TOTAL", "MONTANTE", "DEBITO"))), cols[-1] if cols else None)
-    if not card_col or not amount_col:
-        raise ValueError("Não foi possível identificar cartão e valor no ficheiro PRIO.")
+    """Lê relatórios PRIO cujo cabeçalho real começa normalmente na 4.ª linha."""
+    workbook = pd.ExcelFile(path)
     grouped = defaultdict(float)
-    for _, r in df.iterrows():
-        card = clean_identifier(r[card_col])
-        if card:
-            grouped[card] += money(r[amount_col])
+    sheets_read = 0
+
+    for sheet in workbook.sheet_names:
+        # Localiza automaticamente a linha do cabeçalho (o modelo original usa header=3).
+        preview = pd.read_excel(path, sheet_name=sheet, header=None, nrows=12, dtype=str).fillna("")
+        header_row = None
+        for i, row in preview.iterrows():
+            names = [norm(v) for v in row.tolist()]
+            has_card = any("CARTAO" in x or x == "PAN" for x in names)
+            has_total = any(x == "TOTAL" or "VALOR" in x or "MONTANTE" in x or "DEBITO" in x for x in names)
+            if has_card and has_total:
+                header_row = int(i)
+                break
+        if header_row is None:
+            continue
+
+        df = pd.read_excel(path, sheet_name=sheet, header=header_row, dtype=str).fillna("")
+        cols = list(df.columns)
+        card_col = next((c for c in cols if "CARTAO" in norm(c) or norm(c) == "PAN"), None)
+        amount_col = next((c for c in cols if norm(c) == "TOTAL"), None)
+        if amount_col is None:
+            amount_col = next((c for c in cols if any(x in norm(c) for x in ("VALOR", "MONTANTE", "DEBITO"))), None)
+        if card_col is None or amount_col is None:
+            continue
+
+        sheets_read += 1
+        for _, r in df.iterrows():
+            card = clean_card_number(r.get(card_col, ""))
+            amount = money(r.get(amount_col, ""))
+            if card and amount != 0:
+                grouped[card] += abs(amount)
+
+    if not grouped:
+        raise ValueError("Não foi possível encontrar despesas PRIO. O arquivo precisa conter as colunas CARTÃO e TOTAL, normalmente a partir da 4.ª linha.")
+
     with db() as con:
-        con.executemany("INSERT INTO fuel(import_id,card_number,amount,source_file) VALUES(?,?,?,?)", [(import_id,k,v,path.name) for k,v in grouped.items()])
-    return len(grouped), f"{len(grouped)} cartões consolidados"
+        con.executemany(
+            "INSERT INTO fuel(import_id,card_number,amount,source_file) VALUES(?,?,?,?)",
+            [(import_id, card, round(amount, 2), path.name) for card, amount in grouped.items()],
+        )
+    total = sum(grouped.values())
+    return len(grouped), f"{len(grouped)} cartões PRIO consolidados em {sheets_read} aba(s), total € {total:.2f}"
 
 
 def match_driver(identifier: str, origin: str, display_name: str):
@@ -421,9 +468,9 @@ def build_closing(label: str) -> int:
             drivers = [dict(r) for r in con.execute("SELECT * FROM drivers").fetchall()]
 
         fuel_map = {
-            clean_identifier(r.get("card_number")): money(r.get("amount"))
+            clean_card_number(r.get("card_number")): money(r.get("amount"))
             for r in fuel_rows
-            if clean_identifier(r.get("card_number"))
+            if clean_card_number(r.get("card_number"))
         }
 
         by_external = defaultdict(list)
@@ -506,7 +553,7 @@ def build_closing(label: str) -> int:
             is_tvde = category == "TVDE"
             commission_base = gross + cash if is_eats else gross
             commission = commission_base * pct
-            fuel_value = fuel_map.get(clean_identifier(d.get("fuel_card")), 0.0)
+            fuel_value = fuel_map.get(clean_card_number(d.get("fuel_card")), 0.0)
             discount = money(d.get("discount"))
             reimbursement = (
                 money(d.get("reimbursement")) + money(a["report_reimb"])

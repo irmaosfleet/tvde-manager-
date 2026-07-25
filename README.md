@@ -23,7 +23,7 @@ Substitua os ficheiros do repositório pelos desta pasta e no Render use:
 
 Depois limpe a semana importada, importe novamente os relatórios e gere um novo fechamento.
 
-## Versão 1.0.9 — Sem IBAN
+## Versão 1.0.10 — Sem IBAN
 - Nova opção **Sem IBAN** no menu.
 - Lista de motoristas sem IBAN com pesquisa.
 - Edição rápida de IBAN, banco, parceiro e comissão do parceiro.
