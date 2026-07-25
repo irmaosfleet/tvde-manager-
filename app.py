@@ -299,11 +299,36 @@ def col_value(row: pd.Series, col: str) -> Any:
     return 0
 
 
+def correct_origin_by_file_and_columns(filename: str, mapping, columns: list[str]):
+    """Corrige a origem usando o nome real do relatório e seu cabeçalho.
+
+    Arquivos de empresas/cidades podem ter conteúdo idêntico e ainda assim são
+    relatórios distintos. Também diferencia Uber TVDE de Uber Eats, que usam
+    cabeçalhos semelhantes.
+    """
+    name = norm(Path(filename).stem)
+    cols = {norm(c) for c in columns}
+    result = dict(mapping)
+
+    if "RELATORIO BOLT FOOD" in name:
+        result["origin_ref"] = "BOLT_FOOD"
+    elif "RELATORIO BOLT" in name:
+        result["origin_ref"] = "BOLT_TVDE"
+    elif "RELATORIO TVDE" in name:
+        result["origin_ref"] = "UBER_TVDE"
+    elif "UUID DO MOTORISTA" in cols:
+        # Relatórios de cidades, Bike, Moto e Eats são Uber Eats.
+        result["origin_ref"] = "UBER EATS"
+
+    return result
+
+
 def process_report_file(path: Path, import_id: int) -> tuple[int, str]:
     df = read_csv_flexible(path)
     mapping = find_mapping(path.name, list(df.columns))
     if not mapping:
         raise ValueError("O nome do ficheiro não está configurado em Arquivos_Pgto e o cabeçalho não foi reconhecido.")
+    mapping = correct_origin_by_file_and_columns(path.name, mapping, list(df.columns))
     origin = str(mapping["origin_ref"])
     count = 0
     rows = []
@@ -712,9 +737,15 @@ def imports_page():
             data = f.read()
             sha = hashlib.sha256(data).hexdigest()
             with db() as con:
-                duplicate = con.execute("SELECT id FROM imports WHERE sha256=?", (sha,)).fetchone()
+                # Só é duplicado quando o mesmo nome E o mesmo conteúdo já foram
+                # enviados. Arquivos de frotas diferentes podem ter conteúdo
+                # idêntico e precisam ser processados separadamente.
+                duplicate = con.execute(
+                    "SELECT id FROM imports WHERE filename=? AND sha256=?",
+                    (filename, sha),
+                ).fetchone()
             if duplicate:
-                flash(f"{filename}: já foi importado anteriormente; ignorado.", "warning")
+                flash(f"{filename}: este mesmo arquivo já foi importado nesta semana; ignorado.", "warning")
                 continue
             p = UPLOAD_DIR / f"{datetime.now():%Y%m%d%H%M%S%f}_{filename}"
             p.write_bytes(data)
