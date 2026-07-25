@@ -1,23 +1,24 @@
-# FleetFlow 1.0.3 — Correção do fechamento
+# FleetFlow 1.0.8
 
-Esta versão corrige o erro 500 ao clicar em **Processar semana**.
+Atualização financeira para GitHub e Render.
 
-Principais mudanças:
-- cálculo protegido contra linhas incompletas;
-- conversão segura de valores e percentuais;
-- taxa de 1,25 aplicada uma vez por IBAN AZUL;
-- mensagem do erro exibida na própria página;
-- fechamento marcado como ERRO no histórico quando houver falha;
-- não depende de pastas templates/static.
+## Correções desta versão
 
-## Render
-Build: `pip install -r requirements.txt`
-Start: `gunicorn app:app --workers 1 --threads 4 --timeout 180`
+- Dinheiro em mãos aplicado somente à Uber Eats.
+- Dinheiro em mãos entra na base da comissão e é abatido integralmente no pagamento final.
+- Saldos iguais ou inferiores a zero continuam fora do XML e aparecem no relatório de negativos.
+- Pagamentos separados em dois grupos:
+  - TVDE: Uber TVDE + Bolt TVDE.
+  - Delivery: Uber Eats + Bolt Food.
+- Consolidação por IBAN feita dentro de cada grupo.
+- Taxa de € 1,25 aplicada uma vez por IBAN em cada grupo de pagamento.
+- XMLs divididos em lotes de até € 50.000.
+- Download em ZIP com nomes `PAGAMENTO_TVDE_01.xml` e `PAGAMENTO_DELIVERY_01.xml`.
 
-Login inicial: `admin` / `admin123` (altere no Render).
+## Publicação
 
-## Versão 1.0.6
-- Corrige `UNIQUE constraint failed: imports.sha256`.
-- A assinatura de duplicidade passa a usar nome do arquivo + conteúdo.
-- Arquivos com conteúdos iguais e nomes diferentes são aceitos.
-- Reimportação do mesmo nome com o mesmo conteúdo é ignorada sem erro 500.
+Substitua os ficheiros do repositório pelos desta pasta e no Render use:
+
+`Manual Deploy` → `Clear build cache & deploy`
+
+Depois limpe a semana importada, importe novamente os relatórios e gere um novo fechamento.
