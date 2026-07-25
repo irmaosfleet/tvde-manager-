@@ -1,58 +1,43 @@
-# Plataforma Irmãos Fleet 2.0 — Base de Produção
+# FleetFlow 1.0
 
-Esta atualização substitui a versão 1.4 e utiliza o banco oficial enviado pelo utilizador.
+Primeira versão funcional do novo sistema de fechamento semanal para frotas.
 
-## Incluído nesta versão
+## Funcionalidades
+- Login por utilizador e senha.
+- Dashboard semanal com indicadores e gráficos.
+- Banco de motoristas pesquisável e editável.
+- Importação inicial do `BANCO_DE_DADOS.xlsx`.
+- Upload em lote de relatórios Uber, Uber Eats, Bolt, Bolt Food e ficheiros PRIO.
+- Leitura dirigida pela aba `Arquivos_Pgto`.
+- Processamento por motorista, origem e IBAN.
+- Regra de dinheiro em mãos para Uber Eats.
+- Reembolsos apenas para TVDE.
+- Taxa de € 1,25 uma vez por IBAN quando o banco é AZUL.
+- Exportação do resultado geral em Excel.
+- Geração XML SEPA `pain.001.001.03`.
 
-- Migração do `BANCO_DE_DADOS.xlsx` para SQLite.
-- 10.381 cadastros oficiais importados.
-- 24 parceiros identificados e vinculados aos motoristas.
-- Campos migrados: ID, nome, cidade, companhia, IBAN, banco, comissões, parceiro, cartão PRIO, percentagem, aluguel, descontos, reembolsos, imediata e observação.
-- Pesquisa no cadastro por nome, ID, IBAN, cartão, cidade e companhia.
-- Tela **Sem IBAN** com duas opções:
-  - cadastro definitivo no banco;
-  - IBAN temporário somente para uma semana e grupo.
-- IBAN compartilhado permitido, com alerta e composição individual no relatório.
-- Agrupamento de pagamentos por IBAN com uma taxa bancária por transferência.
-- Auditoria de pagamentos por IBAN.
-- Histórico de alterações do sistema.
-- Cadastro de parceiros e criação de login.
-- Perfil Administrador com acesso total.
-- Perfil Parceiro limitado aos próprios motoristas.
-- Importação Uber, Bolt e PRIO mantida.
-- XML `pain.001.001.03`, divisão por partes e limite de €50.000 mantidos.
+## Login inicial
+Defina no Render as variáveis:
+- `ADMIN_USER`
+- `ADMIN_PASSWORD`
+- `SECRET_KEY`
 
-## Primeiro acesso
+Em ambiente local, os padrões são `admin` / `admin123`.
 
-- Utilizador: `admin`
-- Senha: `admin123`
+## Executar localmente
+```bash
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
+pip install -r requirements.txt
+python app.py
+```
+Abra `http://localhost:5000`.
 
-Altere as variáveis `ADMIN_USER`, `ADMIN_PASSWORD` e `SECRET_KEY` no Render antes do uso real.
+## Publicar no GitHub e Render
+1. Envie todos os ficheiros desta pasta para um repositório GitHub.
+2. No Render, crie um Web Service ligado ao repositório.
+3. Use o `render.yaml` ou configure manualmente os comandos indicados.
+4. Defina uma senha forte em `ADMIN_PASSWORD`.
 
-## Atualização no GitHub
-
-Substitua todos os arquivos do repositório pelos arquivos deste pacote e aguarde o novo deploy do Render.
-
-## Segurança obrigatória
-
-Este pacote contém dados reais, incluindo IBANs. O repositório do GitHub deve ser **PRIVADO**. Nunca publique este ZIP ou o banco em um repositório público.
-
-Para uso contínuo no Render, configure um Persistent Disk e defina `DB_PATH` apontando para esse disco, para que novos dados não sejam perdidos em um redeploy.
-
-## Observação
-
-A base de permissões de parceiros está pronta. Os acessos de cada parceiro são criados na tela **Parceiros**, informando utilizador e senha inicial. O portal detalhado do motorista será a etapa seguinte.
-
-## Correção 2.0.1
-- Corrigido erro 500 na tela de preparação/geração dos XMLs.
-- Corrigido conflito do Jinja com a chave `items` dos lotes de pagamentos.
-- Pacote organizado com os arquivos na raiz para facilitar o upload ao GitHub.
-
-## Atualização 3.1.0 — importação consolidada
-
-- Consolida várias linhas do mesmo motorista em um único relatório por plataforma, semana e grupo.
-- Evita totais inflados em arquivos detalhados por viagem.
-- Permite importar vários arquivos da mesma plataforma na mesma semana, somando as partes sem criar linhas duplicadas.
-- Melhora a leitura de CSVs com linhas introdutórias, diferentes delimitadores e codificações.
-- Amplia o reconhecimento de cabeçalhos da Uber Eats, Bolt Food e arquivos em inglês.
-- Registra uma assinatura curta do arquivo no histórico de importações para facilitar auditoria.
+## Observação importante
+Esta é a primeira base testável. Antes de usar para pagamentos reais, compare os resultados e o XML com o programa atual e valide no portal do banco.
