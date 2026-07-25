@@ -366,63 +366,164 @@ def match_driver(identifier: str, origin: str, display_name: str):
 
 
 def build_closing(label: str) -> int:
+    """Processa o fechamento sem deixar uma linha inválida derrubar a aplicação."""
+    created_at = datetime.now().isoformat(timespec="seconds")
     with db() as con:
-        cur = con.execute("INSERT INTO closings(label,created_at,status) VALUES(?,?,?)", (label, datetime.now().isoformat(timespec="seconds"), "PROCESSADO"))
-        closing_id = cur.lastrowid
-        earnings = con.execute("SELECT * FROM raw_earnings").fetchall()
-        fuel_rows = con.execute("SELECT card_number,SUM(amount) amount FROM fuel GROUP BY card_number").fetchall()
-    fuel_map = {clean_identifier(r["card_number"]): money(r["amount"]) for r in fuel_rows}
-    aggregated: dict[int, dict[str, Any]] = {}
-    unmatched = 0
-    for e in earnings:
-        driver = match_driver(e["identifier"], e["origin_ref"], e["display_name"])
-        if not driver:
-            unmatched += 1
-            continue
-        a = aggregated.setdefault(driver["id"], {"driver": driver, "gross":0.0, "cash":0.0, "report_reimb":0.0, "origins":set()})
-        a["gross"] += money(e["gross"])
-        a["cash"] += money(e["cash"])
-        a["report_reimb"] += money(e["reimbursement"])
-        a["origins"].add(e["origin_ref"])
-    items = []
-    iban_groups = defaultdict(float)
-    temp = []
-    for a in aggregated.values():
-        d = a["driver"]
-        origins = ", ".join(sorted(a["origins"]))
-        gross, cash = a["gross"], a["cash"]
-        pct = money(d["percentage"])
-        is_eats = any("EATS" in norm(x) for x in a["origins"])
-        is_tvde = any("TVDE" in norm(x) for x in a["origins"])
-        commission_base = gross + cash if is_eats else gross
-        commission = commission_base * pct
-        fuel_value = fuel_map.get(clean_identifier(d["fuel_card"]), 0.0)
-        discount = money(d["discount"])
-        reimbursement = (money(d["reimbursement"]) + a["report_reimb"]) if is_tvde else 0.0
-        immediate = money(d["immediate"])
-        net = gross - commission - fuel_value - discount - immediate + reimbursement
-        if is_eats:
-            net -= cash
-        iban = str(d["iban"] or "").replace(" ", "").upper()
-        temp.append({"driver":d,"origins":origins,"gross":gross,"cash":cash,"commission":commission,"fuel":fuel_value,"discount":discount,"reimbursement":reimbursement,"immediate":immediate,"net":net,"iban":iban})
-        if iban:
-            iban_groups[iban] += net
-    fee_applied = set()
-    for t in temp:
-        d, iban = t["driver"], t["iban"]
-        fee = 0.0
-        if iban and norm(d["bank_color"]) == "AZUL" and iban not in fee_applied:
-            fee = 1.25
-            fee_applied.add(iban)
-            iban_groups[iban] -= fee
-        group_total = iban_groups.get(iban, t["net"] - fee)
-        items.append((closing_id,d["id"],d["name"],iban,d["bank_color"],t["origins"],t["gross"],t["cash"],t["commission"],t["fuel"],t["discount"],t["reimbursement"],t["immediate"],fee,t["net"],group_total))
-    with db() as con:
-        con.executemany("""INSERT INTO closing_items(closing_id,driver_id,driver_name,iban,bank_color,origins,gross,cash,commission,fuel,discount,reimbursement,immediate,bank_fee,net_before_group,group_total)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", items)
-        con.execute("UPDATE closings SET status=? WHERE id=?", (f"PROCESSADO ({unmatched} não encontrados)", closing_id))
-    return closing_id
+        cur = con.execute(
+            "INSERT INTO closings(label,created_at,status) VALUES(?,?,?)",
+            (label, created_at, "PROCESSANDO"),
+        )
+        closing_id = int(cur.lastrowid)
 
+    try:
+        with db() as con:
+            earnings = [dict(r) for r in con.execute("SELECT * FROM raw_earnings").fetchall()]
+            fuel_rows = [dict(r) for r in con.execute(
+                "SELECT card_number,SUM(amount) amount FROM fuel GROUP BY card_number"
+            ).fetchall()]
+            drivers = [dict(r) for r in con.execute("SELECT * FROM drivers").fetchall()]
+
+        fuel_map = {
+            clean_identifier(r.get("card_number")): money(r.get("amount"))
+            for r in fuel_rows
+            if clean_identifier(r.get("card_number"))
+        }
+
+        by_external = defaultdict(list)
+        by_name = defaultdict(list)
+        for d in drivers:
+            ext = clean_identifier(d.get("external_id"))
+            if ext:
+                by_external[ext].append(d)
+            name_key = norm(d.get("name"))
+            if name_key:
+                by_name[name_key].append(d)
+
+        def find_driver(identifier: Any, origin: Any, display_name: Any):
+            ident = clean_identifier(identifier)
+            origin_key = norm(origin)
+            if "BOLT_TVDE" in origin_key:
+                digits = re.sub(r"\D", "", str(identifier or ""))
+                if digits:
+                    for d in drivers:
+                        dd = re.sub(r"\D", "", str(d.get("external_id") or ""))
+                        if dd and (digits == dd or digits[-9:] == dd[-9:]):
+                            return d
+            if ident and len(by_external.get(ident, [])) == 1:
+                return by_external[ident][0]
+            name_key = norm(display_name)
+            if name_key and len(by_name.get(name_key, [])) == 1:
+                return by_name[name_key][0]
+            return None
+
+        aggregated: dict[int, dict[str, Any]] = {}
+        unmatched = 0
+        invalid_rows = 0
+        for e in earnings:
+            try:
+                driver = find_driver(e.get("identifier"), e.get("origin_ref"), e.get("display_name"))
+                if not driver:
+                    unmatched += 1
+                    continue
+                driver_id = int(driver["id"])
+                a = aggregated.setdefault(driver_id, {
+                    "driver": driver,
+                    "gross": 0.0,
+                    "cash": 0.0,
+                    "report_reimb": 0.0,
+                    "origins": set(),
+                })
+                a["gross"] += money(e.get("gross"))
+                a["cash"] += money(e.get("cash"))
+                a["report_reimb"] += money(e.get("reimbursement"))
+                origin = str(e.get("origin_ref") or "SEM ORIGEM")
+                a["origins"].add(origin)
+            except Exception:
+                invalid_rows += 1
+                app.logger.exception("Linha ignorada durante o fechamento: %r", e)
+
+        items = []
+        iban_groups = defaultdict(float)
+        temp = []
+        for a in aggregated.values():
+            d = a["driver"]
+            origins_set = a["origins"]
+            origins = ", ".join(sorted(origins_set))
+            gross = money(a["gross"])
+            cash = money(a["cash"])
+            pct = money(d.get("percentage"))
+            # Aceita tanto 0,15 quanto 15 no banco.
+            if pct > 1:
+                pct = pct / 100.0
+            pct = max(0.0, min(pct, 1.0))
+            is_eats = any("EATS" in norm(x) for x in origins_set)
+            is_tvde = any("TVDE" in norm(x) for x in origins_set)
+            commission_base = gross + cash if is_eats else gross
+            commission = commission_base * pct
+            fuel_value = fuel_map.get(clean_identifier(d.get("fuel_card")), 0.0)
+            discount = money(d.get("discount"))
+            reimbursement = (
+                money(d.get("reimbursement")) + money(a["report_reimb"])
+            ) if is_tvde else 0.0
+            immediate = money(d.get("immediate"))
+            net = gross - commission - fuel_value - discount - immediate + reimbursement
+            if is_eats:
+                net -= cash
+            iban = re.sub(r"\s+", "", str(d.get("iban") or "")).upper()
+            temp.append({
+                "driver": d, "origins": origins, "gross": gross, "cash": cash,
+                "commission": commission, "fuel": fuel_value, "discount": discount,
+                "reimbursement": reimbursement, "immediate": immediate,
+                "net": net, "iban": iban,
+            })
+            if iban:
+                iban_groups[iban] += net
+
+        fee_ibans = {
+            t["iban"] for t in temp
+            if t["iban"] and norm(t["driver"].get("bank_color")) == "AZUL"
+        }
+        for iban in fee_ibans:
+            iban_groups[iban] -= 1.25
+
+        fee_applied = set()
+        for t in temp:
+            d = t["driver"]
+            iban = t["iban"]
+            fee = 0.0
+            if iban in fee_ibans and iban not in fee_applied:
+                fee = 1.25
+                fee_applied.add(iban)
+            group_total = iban_groups.get(iban, t["net"] - fee)
+            items.append((
+                closing_id, int(d["id"]), str(d.get("name") or "SEM NOME"), iban,
+                str(d.get("bank_color") or ""), t["origins"], t["gross"], t["cash"],
+                t["commission"], t["fuel"], t["discount"], t["reimbursement"],
+                t["immediate"], fee, t["net"], group_total,
+            ))
+
+        status = f"PROCESSADO ({unmatched} não encontrados; {invalid_rows} linhas ignoradas)"
+        with db() as con:
+            con.execute("DELETE FROM closing_items WHERE closing_id=?", (closing_id,))
+            if items:
+                con.executemany(
+                    """INSERT INTO closing_items(
+                    closing_id,driver_id,driver_name,iban,bank_color,origins,gross,cash,
+                    commission,fuel,discount,reimbursement,immediate,bank_fee,
+                    net_before_group,group_total)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    items,
+                )
+            con.execute("UPDATE closings SET status=? WHERE id=?", (status, closing_id))
+        return closing_id
+    except Exception as exc:
+        app.logger.exception("Falha ao gerar fechamento %s", closing_id)
+        with db() as con:
+            con.execute(
+                "UPDATE closings SET status=? WHERE id=?",
+                (f"ERRO: {type(exc).__name__}: {str(exc)[:300]}", closing_id),
+            )
+        raise
 
 def generate_xml(closing_id: int) -> bytes:
     with db() as con:
@@ -629,9 +730,14 @@ def clear_imports():
 def closings_page():
     if request.method == "POST":
         label = request.form.get("label") or f"Semana {datetime.now():%d/%m/%Y}"
-        cid = build_closing(label)
-        flash("Fechamento processado. Confira os valores antes de gerar o XML.", "success")
-        return redirect(url_for("closing_detail", closing_id=cid))
+        try:
+            cid = build_closing(label)
+            flash("Fechamento processado. Confira os valores antes de gerar o XML.", "success")
+            return redirect(url_for("closing_detail", closing_id=cid))
+        except Exception as exc:
+            app.logger.exception("Erro no botão Processar semana")
+            flash(f"Não foi possível gerar o fechamento: {type(exc).__name__}: {str(exc)}", "danger")
+            return redirect(url_for("closings_page"))
     with db() as con:
         rows = con.execute("SELECT * FROM closings ORDER BY id DESC").fetchall()
     return render_template("closings.html", rows=rows)
@@ -685,7 +791,10 @@ def health():
 @app.errorhandler(500)
 def internal_error(exc):
     app.logger.error("Erro interno: %s\n%s", exc, traceback.format_exc())
-    return render_template("error.html", message="Ocorreu um erro interno. Consulte os logs do Render para ver o detalhe."), 500
+    try:
+        return render_template("error.html", message=f"Ocorreu um erro interno: {type(exc).__name__}. Consulte os logs do Render."), 500
+    except Exception:
+        return f"Erro interno: {type(exc).__name__}: {exc}", 500
 
 @app.errorhandler(413)
 def too_large(_):

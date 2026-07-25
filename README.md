@@ -1,12 +1,17 @@
-# FleetFlow 1.0.2 — versão sem pastas
+# FleetFlow 1.0.3 — Correção do fechamento
 
-Esta versão foi preparada para envio pelo navegador do GitHub. Todos os ficheiros ficam na raiz; não é necessário enviar as pastas templates/static/uploads/reports.
+Esta versão corrige o erro 500 ao clicar em **Processar semana**.
 
-## Login inicial
-- Utilizador: admin
-- Senha local: admin123
+Principais mudanças:
+- cálculo protegido contra linhas incompletas;
+- conversão segura de valores e percentuais;
+- taxa de 1,25 aplicada uma vez por IBAN AZUL;
+- mensagem do erro exibida na própria página;
+- fechamento marcado como ERRO no histórico quando houver falha;
+- não depende de pastas templates/static.
 
-No Render, configure ADMIN_PASSWORD.
+## Render
+Build: `pip install -r requirements.txt`
+Start: `gunicorn app:app --workers 1 --threads 4 --timeout 180`
 
-## Upload no GitHub
-Extraia o ZIP, selecione todos os ficheiros e envie-os para a raiz do repositório.
+Login inicial: `admin` / `admin123` (altere no Render).
