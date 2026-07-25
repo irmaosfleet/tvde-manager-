@@ -22,3 +22,11 @@ Substitua os ficheiros do repositório pelos desta pasta e no Render use:
 `Manual Deploy` → `Clear build cache & deploy`
 
 Depois limpe a semana importada, importe novamente os relatórios e gere um novo fechamento.
+
+## Versão 1.0.9 — Sem IBAN
+- Nova opção **Sem IBAN** no menu.
+- Lista de motoristas sem IBAN com pesquisa.
+- Edição rápida de IBAN, banco, parceiro e comissão do parceiro.
+- Botão **Salvar e recalcular** atualiza o cadastro e os fechamentos já processados.
+- Recalcula somente a consolidação por IBAN e a taxa bancária, sem mudar a lógica financeira.
+- Exportação Excel geral e abas separadas por parceiro.
