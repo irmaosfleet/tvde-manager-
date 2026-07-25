@@ -735,23 +735,33 @@ def imports_page():
                 continue
             filename = secure_filename(f.filename)
             data = f.read()
-            sha = hashlib.sha256(data).hexdigest()
+            # A coluna sha256 possui UNIQUE no banco das versões anteriores.
+            # Para permitir arquivos de empresas diferentes com conteúdo idêntico,
+            # a assinatura considera o nome normalizado + o conteúdo do arquivo.
+            # Assim, somente o mesmo arquivo (mesmo nome e conteúdo) é duplicado.
+            signature_source = filename.casefold().encode("utf-8") + b"\0" + data
+            sha = hashlib.sha256(signature_source).hexdigest()
             with db() as con:
-                # Só é duplicado quando o mesmo nome E o mesmo conteúdo já foram
-                # enviados. Arquivos de frotas diferentes podem ter conteúdo
-                # idêntico e precisam ser processados separadamente.
                 duplicate = con.execute(
-                    "SELECT id FROM imports WHERE filename=? AND sha256=?",
-                    (filename, sha),
+                    "SELECT id FROM imports WHERE sha256=?",
+                    (sha,),
                 ).fetchone()
             if duplicate:
                 flash(f"{filename}: este mesmo arquivo já foi importado nesta semana; ignorado.", "warning")
                 continue
             p = UPLOAD_DIR / f"{datetime.now():%Y%m%d%H%M%S%f}_{filename}"
             p.write_bytes(data)
-            with db() as con:
-                cur = con.execute("INSERT INTO imports(filename,sha256,kind,status,created_at) VALUES(?,?,?,?,?)", (filename,sha,kind,"PROCESSANDO",datetime.now().isoformat(timespec="seconds")))
-                iid = cur.lastrowid
+            try:
+                with db() as con:
+                    cur = con.execute(
+                        "INSERT INTO imports(filename,sha256,kind,status,created_at) VALUES(?,?,?,?,?)",
+                        (filename, sha, kind, "PROCESSANDO", datetime.now().isoformat(timespec="seconds")),
+                    )
+                    iid = cur.lastrowid
+            except sqlite3.IntegrityError:
+                # Proteção adicional para bases antigas ou envios simultâneos.
+                flash(f"{filename}: este mesmo arquivo já foi importado nesta semana; ignorado.", "warning")
+                continue
             try:
                 if kind == "fuel" or filename.lower().endswith((".xlsx", ".xls")):
                     count, msg = process_fuel_file(p, iid)

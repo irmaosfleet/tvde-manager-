@@ -15,3 +15,9 @@ Build: `pip install -r requirements.txt`
 Start: `gunicorn app:app --workers 1 --threads 4 --timeout 180`
 
 Login inicial: `admin` / `admin123` (altere no Render).
+
+## Versão 1.0.6
+- Corrige `UNIQUE constraint failed: imports.sha256`.
+- A assinatura de duplicidade passa a usar nome do arquivo + conteúdo.
+- Arquivos com conteúdos iguais e nomes diferentes são aceitos.
+- Reimportação do mesmo nome com o mesmo conteúdo é ignorada sem erro 500.
