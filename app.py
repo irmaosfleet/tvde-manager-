@@ -10,6 +10,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 from datetime import date, datetime, timedelta
 import csv
 import hmac
+import hashlib
 import os
 import sqlite3
 import unicodedata
@@ -403,7 +404,7 @@ button,.btn{border:0;border-radius:10px;background:#172033;color:white;padding:1
  </div>
  <div class="nav-title">Conta</div>
  <div class="nav"><a href="/logout">↗ Sair</a></div>
- <div class="version">Plataforma Irmãos Fleet 3.0.0</div>
+ <div class="version">Plataforma Irmãos Fleet 3.1.0</div>
 </aside>
 <section class="main">
  <header class="topbar">
@@ -420,7 +421,7 @@ button,.btn{border:0;border-radius:10px;background:#172033;color:white;padding:1
   {% for m in messages %}<div class="flash">{{m}}</div>{% endfor %}
   {% endwith %}
   {{ body|safe }}
-  <footer class="app-footer"><span><strong>Plataforma Irmãos Fleet 3.0.0</strong> · Desenvolvido para gestão de frotas TVDE</span><span>IRMÃOS FLEET</span></footer>
+  <footer class="app-footer"><span><strong>Plataforma Irmãos Fleet 3.1.0</strong> · Desenvolvido para gestão de frotas TVDE</span><span>IRMÃOS FLEET</span></footer>
  </main>
 </section>
 </div>
@@ -639,8 +640,40 @@ def _row_value(row, *candidates):
     return ""
 
 
+def _save_aggregated_report(c, platform, driver_id, week, values, filename, group):
+    """Mantém uma única linha por motorista/plataforma/semana/grupo.
+
+    Quando a semana é composta por vários arquivos, os valores são somados. Antes
+    de uma nova importação completa, a categoria é limpa na rota /importar.
+    """
+    existing = c.execute("""SELECT id FROM relatorios
+                            WHERE plataforma=? AND motorista_id=? AND semana=?
+                              AND COALESCE(grupo,'TVDE')=?""",
+                         (platform, driver_id, week, group)).fetchone()
+    if existing:
+        c.execute("""UPDATE relatorios SET
+                     bruto=COALESCE(bruto,0)+?, dinheiro_maos=COALESCE(dinheiro_maos,0)+?,
+                     comissao=COALESCE(comissao,0)+?, portagens=COALESCE(portagens,0)+?,
+                     outros_descontos=COALESCE(outros_descontos,0)+?,
+                     reembolsos=COALESCE(reembolsos,0)+?, liquido=COALESCE(liquido,0)+?,
+                     arquivo=CASE WHEN COALESCE(arquivo,'')='' THEN ?
+                                  WHEN instr(arquivo,?)>0 THEN arquivo ELSE arquivo||' | '||? END,
+                     criado_em=? WHERE id=?""",
+                  (values['bruto'], values['dinheiro'], values['comissao'], values['portagens'],
+                   values['outros'], values['reembolsos'], values['liquido'], filename,
+                   filename, filename, datetime.now().isoformat(timespec='seconds'), existing['id']))
+    else:
+        c.execute("""INSERT INTO relatorios(
+                   plataforma,motorista_id,semana,bruto,dinheiro_maos,comissao,
+                   portagens,outros_descontos,reembolsos,liquido,criado_em,grupo,arquivo
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                  (platform,driver_id,week,values['bruto'],values['dinheiro'],values['comissao'],
+                   values['portagens'],values['outros'],values['reembolsos'],values['liquido'],
+                   datetime.now().isoformat(timespec='seconds'),group,filename))
+
+
 def import_uber(c, rows, week, filename="", group="TVDE"):
-    count = 0
+    aggregated = {}
     for row in rows:
         first = _row_value(row, "Nome próprio do motorista", "Nome do motorista", "Primeiro nome", "Driver first name")
         last = _row_value(row, "Apelido do motorista", "Sobrenome do motorista", "Último nome", "Driver last name")
@@ -650,13 +683,15 @@ def import_uber(c, rows, week, filename="", group="TVDE"):
             continue
         external = _row_value(row, "UUID do motorista", "UUID do estafeta", "Driver UUID", "Courier UUID", "ID do motorista", "ID do estafeta")
         driver_id = get_or_create_driver(c, name, external_id=external)
+        key = driver_id
+        item = aggregated.setdefault(key, {'bruto':0,'dinheiro':0,'comissao':0,'portagens':0,'outros':0,'reembolsos':0,'liquido':0})
         bruto = num(_row_value(row,
             "Pago a si : Os seus rendimentos : Tarifa", "Pago a si:Os seus rendimentos:Tarifa",
-            "Os seus rendimentos : Tarifa", "Tarifa", "Ganhos brutos", "Total earnings"))
+            "Os seus rendimentos : Tarifa", "Tarifa", "Ganhos brutos", "Total earnings", "Fare"))
         dinheiro = abs(num(_row_value(row,
             "Pago a si : Saldo da viagem : Pagamentos : Dinheiro recebido",
             "Pago a si:Saldo da viagem:Pagamentos:Dinheiro recebido",
-            "Dinheiro recebido", "Cash collected")))
+            "Dinheiro recebido", "Cash collected", "Cash received")))
         service = abs(num(_row_value(row,
             "Pago a si:Os seus rendimentos:Taxa de serviço",
             "Pago a si : Os seus rendimentos : Taxa de serviço",
@@ -665,46 +700,44 @@ def import_uber(c, rows, week, filename="", group="TVDE"):
             "Pago a si:Saldo da viagem:Reembolsos:Portagem",
             "Pago a si : Saldo da viagem : Reembolsos : Portagem",
             "Portagem", "Portagens", "Tolls")))
-        paid = num(_row_value(row, "Pago a si", "Pagamento", "Valor pago", "Payout", "Net payout"))
+        paid = num(_row_value(row, "Pago a si", "Pagamento", "Valor pago", "Payout", "Net payout", "Your earnings"))
         earnings = num(_row_value(row, "Pago a si : Os seus rendimentos", "Os seus rendimentos", "Total earnings", "Ganhos líquidos"))
         liquid = paid if paid else earnings - dinheiro
-        c.execute("""INSERT INTO relatorios(plataforma,motorista_id,semana,bruto,dinheiro_maos,comissao,
-                   portagens,outros_descontos,reembolsos,liquido,criado_em,grupo,arquivo)
-                   VALUES('Uber',?,?,?,?,?,?,?,?,?,?,?,?)""",
-                  (driver_id, week, bruto, dinheiro, service, tolls, 0, tolls, liquid,
-                   datetime.now().isoformat(timespec="seconds"), group, filename))
-        if group == "DELIVERY":
+        item['bruto'] += bruto; item['dinheiro'] += dinheiro; item['comissao'] += service
+        item['portagens'] += tolls; item['reembolsos'] += tolls; item['liquido'] += liquid
+    for driver_id, values in aggregated.items():
+        _save_aggregated_report(c, 'Uber', driver_id, week, values, filename, group)
+        if group == 'DELIVERY':
             c.execute("UPDATE motoristas SET operacao='DELIVERY' WHERE id=?", (driver_id,))
-        count += 1
-    return count
+    return len(aggregated)
 
 
 def import_bolt(c, rows, week, filename="", group="TVDE"):
-    count = 0
+    aggregated = {}
     for row in rows:
-        name = _row_value(row, "Motorista", "Estafeta", "Courier", "Nome")
+        name = _row_value(row, "Motorista", "Estafeta", "Courier", "Nome", "Courier name")
         if not name:
             continue
         email = _row_value(row, "Email", "E-mail")
         phone = _row_value(row, "Telemóvel", "Telefone", "Phone")
-        driver_id = get_or_create_driver(c, name, email, phone, phone or email)
-        bruto = num(_row_value(row, "Ganhos brutos (total)|€", "Ganhos brutos", "Total bruto"))
-        dinheiro = abs(num(_row_value(row, "Dinheiro recebido|€", "Dinheiro recebido")))
-        commission = abs(num(_row_value(row, "Comissões|€", "Comissões", "Comissão")))
-        tolls = abs(num(_row_value(row, "Portagens|€", "Portagens")))
-        other = abs(num(_row_value(row, "Outras taxas|€", "Outras taxas"))) + abs(num(_row_value(row, "Reembolsos aos passageiros|€", "Reembolsos aos passageiros")))
-        reimburse = abs(num(_row_value(row, "Reembolsos de despesas|€", "Reembolsos de despesas")))
-        predicted = num(_row_value(row, "Pagamento previsto|€", "Pagamento previsto"))
-        liquid = predicted if predicted else num(_row_value(row, "Ganhos líquidos|€", "Ganhos líquidos")) - dinheiro
-        c.execute("""INSERT INTO relatorios(plataforma,motorista_id,semana,bruto,dinheiro_maos,comissao,
-                   portagens,outros_descontos,reembolsos,liquido,criado_em,grupo,arquivo)
-                   VALUES('Bolt',?,?,?,?,?,?,?,?,?,?,?,?)""",
-                  (driver_id, week, bruto, dinheiro, commission, tolls, other, reimburse, liquid,
-                   datetime.now().isoformat(timespec="seconds"), group, filename))
-        if group == "DELIVERY":
+        external = _row_value(row, "ID do motorista", "ID do estafeta", "Courier ID", "Driver ID") or phone or email
+        driver_id = get_or_create_driver(c, name, email, phone, external)
+        item = aggregated.setdefault(driver_id, {'bruto':0,'dinheiro':0,'comissao':0,'portagens':0,'outros':0,'reembolsos':0,'liquido':0})
+        bruto = num(_row_value(row, "Ganhos brutos (total)|€", "Ganhos brutos", "Total bruto", "Gross earnings"))
+        dinheiro = abs(num(_row_value(row, "Dinheiro recebido|€", "Dinheiro recebido", "Cash collected")))
+        commission = abs(num(_row_value(row, "Comissões|€", "Comissões", "Comissão", "Commission")))
+        tolls = abs(num(_row_value(row, "Portagens|€", "Portagens", "Tolls")))
+        other = abs(num(_row_value(row, "Outras taxas|€", "Outras taxas", "Other fees"))) + abs(num(_row_value(row, "Reembolsos aos passageiros|€", "Reembolsos aos passageiros")))
+        reimburse = abs(num(_row_value(row, "Reembolsos de despesas|€", "Reembolsos de despesas", "Expense reimbursements")))
+        predicted = num(_row_value(row, "Pagamento previsto|€", "Pagamento previsto", "Expected payout"))
+        liquid = predicted if predicted else num(_row_value(row, "Ganhos líquidos|€", "Ganhos líquidos", "Net earnings")) - dinheiro
+        item['bruto'] += bruto; item['dinheiro'] += dinheiro; item['comissao'] += commission
+        item['portagens'] += tolls; item['outros'] += other; item['reembolsos'] += reimburse; item['liquido'] += liquid
+    for driver_id, values in aggregated.items():
+        _save_aggregated_report(c, 'Bolt', driver_id, week, values, filename, group)
+        if group == 'DELIVERY':
             c.execute("UPDATE motoristas SET operacao='DELIVERY' WHERE id=?", (driver_id,))
-        count += 1
-    return count
+    return len(aggregated)
 
 
 def import_prio_workbook(c, arquivo, semana):
@@ -757,6 +790,59 @@ def import_prio_workbook(c, arquivo, semana):
     return inserted, total_imported, pending
 
 
+def ensure_relatorios_schema(c):
+    """Atualiza a tabela de relatórios sem apagar os dados existentes."""
+    expected = {
+        "grupo": "TEXT DEFAULT 'TVDE'",
+        "arquivo": "TEXT",
+    }
+    cols = {r[1] for r in c.execute("PRAGMA table_info(relatorios)").fetchall()}
+    for name, ddl in expected.items():
+        if name not in cols:
+            c.execute(f"ALTER TABLE relatorios ADD COLUMN {name} {ddl}")
+    # Confirma a estrutura após a migração antes de aceitar arquivos.
+    cols = {r[1] for r in c.execute("PRAGMA table_info(relatorios)").fetchall()}
+    missing = set(expected) - cols
+    if missing:
+        raise RuntimeError("Não foi possível atualizar o banco de relatórios: " + ", ".join(sorted(missing)))
+
+
+def parse_csv_upload(file_storage):
+    """Lê CSVs com codificações, delimitadores e linhas de introdução diferentes."""
+    data = file_storage.read()
+    raw = None
+    for encoding in ("utf-8-sig", "utf-16", "cp1252", "latin-1"):
+        try:
+            raw = data.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    if raw is None:
+        raw = data.decode("utf-8-sig", errors="replace")
+    lines = raw.splitlines()
+    if not lines:
+        return [], set(), hashlib.sha256(data).hexdigest()
+    sample = "\n".join(lines[:30])
+    try:
+        delimiter = csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
+    except csv.Error:
+        counts = {d: sample.count(d) for d in (";", ",", "\t", "|")}
+        delimiter = max(counts, key=counts.get)
+    header_index = 0
+    keywords = ("motorista", "driver", "estafeta", "courier", "pago a si", "ganhos brutos", "uuid")
+    for i, line in enumerate(lines[:40]):
+        cells = [norm(x) for x in next(csv.reader([line], delimiter=delimiter), [])]
+        joined = " | ".join(cells)
+        if len(cells) >= 2 and any(k in joined for k in keywords):
+            header_index = i
+            break
+    body = "\n".join(lines[header_index:])
+    reader = csv.DictReader(StringIO(body), delimiter=delimiter)
+    rows = [dict(r) for r in reader if r and any(str(v or '').strip() for v in r.values())]
+    headers = {norm(k or "") for k in (reader.fieldnames or [])}
+    return rows, headers, hashlib.sha256(data).hexdigest()
+
+
 @app.route("/importar", methods=["GET","POST"])
 @admin_required
 def importar():
@@ -770,26 +856,13 @@ def importar():
         c = db()
         messages=[]
         try:
+            ensure_relatorios_schema(c)
+            c.commit()
             cleaned_categories = set()
             for f in csv_files:
-                data = f.read()
-                raw = None
-                for encoding in ("utf-8-sig", "utf-16", "cp1252", "latin-1"):
-                    try:
-                        raw = data.decode(encoding)
-                        break
-                    except UnicodeDecodeError:
-                        continue
-                if raw is None:
-                    raw = data.decode("utf-8-sig", errors="replace")
-                sample = raw[:10000]
-                try:
-                    dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
-                    delimiter = dialect.delimiter
-                except csv.Error:
-                    delimiter = ";" if sample.count(";") > sample.count(",") else ","
-                rows = list(csv.DictReader(StringIO(raw), delimiter=delimiter))
-                headers_norm = {norm(k or "") for k in (rows[0].keys() if rows else [])}
+                rows, headers_norm, file_hash = parse_csv_upload(f)
+                if not rows:
+                    raise ValueError(f"O arquivo {f.filename} não possui linhas de dados reconhecíveis.")
                 filename_norm = norm(f.filename)
                 is_delivery = any(x in filename_norm for x in ("eats", "delivery", "food", "estafeta", "courier")) or any(
                     any(x in h for x in ("estafeta", "courier", "entrega", "delivery")) for h in headers_norm
@@ -811,7 +884,7 @@ def importar():
                     cleaned_categories.add(category)
                 qty = import_uber(c, rows, week, f.filename, group) if platform == "Uber" else import_bolt(c, rows, week, f.filename, group)
                 c.execute("INSERT INTO importacoes(plataforma,semana,arquivo,linhas,criado_em) VALUES(?,?,?,?,?)",
-                          (platform,week,f.filename,qty,datetime.now().isoformat(timespec="seconds")))
+                          (platform,week,f"{f.filename} [{file_hash[:12]}]",qty,datetime.now().isoformat(timespec="seconds")))
                 label = "Uber Eats" if platform == "Uber" and group == "DELIVERY" else ("Bolt Food" if platform == "Bolt" and group == "DELIVERY" else platform)
                 messages.append(f"{label}: {qty} motoristas")
             for f in prio_files:

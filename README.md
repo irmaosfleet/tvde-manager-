@@ -47,3 +47,12 @@ A base de permissões de parceiros está pronta. Os acessos de cada parceiro sã
 - Corrigido erro 500 na tela de preparação/geração dos XMLs.
 - Corrigido conflito do Jinja com a chave `items` dos lotes de pagamentos.
 - Pacote organizado com os arquivos na raiz para facilitar o upload ao GitHub.
+
+## Atualização 3.1.0 — importação consolidada
+
+- Consolida várias linhas do mesmo motorista em um único relatório por plataforma, semana e grupo.
+- Evita totais inflados em arquivos detalhados por viagem.
+- Permite importar vários arquivos da mesma plataforma na mesma semana, somando as partes sem criar linhas duplicadas.
+- Melhora a leitura de CSVs com linhas introdutórias, diferentes delimitadores e codificações.
+- Amplia o reconhecimento de cabeçalhos da Uber Eats, Bolt Food e arquivos em inglês.
+- Registra uma assinatura curta do arquivo no histórico de importações para facilitar auditoria.
