@@ -62,7 +62,7 @@ app.jinja_loader.mapping["manager.html"] = r"""{% extends 'base.html' %}{% block
 app.secret_key = os.getenv("SECRET_KEY", "troque-esta-chave-em-producao")
 app.config["MAX_CONTENT_LENGTH"] = 80 * 1024 * 1024
 COMPANY_NAME = os.getenv("COMPANY_NAME", "IRMÃOS PLATAFORMA")
-APP_VERSION = "1.2.4"
+APP_VERSION = "1.2.5"
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
@@ -469,6 +469,19 @@ def process_report_file(path: Path, import_id: int) -> tuple[int, str]:
         last = str(col_value(r, mapping["last_name_column"])).strip() if mapping["last_name_column"] != "-" else ""
         gross = money(col_value(r, mapping["value_column"]))
         cash = money(col_value(r, mapping["cash_column"]))
+
+        # Uber TVDE: o campo "Pago a si" inclui ajustes/reembolsos e, por isso,
+        # não deve ser usado como bruto. O bruto correto é "Pago a si : Os seus
+        # rendimentos"; o reembolso entra separadamente mais abaixo.
+        if "UBER TVDE" in norm(origin):
+            tvde_gross_column = resolve_configured_column(
+                list(r.index), "Pago a si : Os seus rendimentos"
+            )
+            if tvde_gross_column is not None:
+                gross = money(r[tvde_gross_column])
+            # Relatórios TVDE não entram em Dinheiro em mãos.
+            cash = 0.0
+
         # Nos relatórios Uber Eats, o dinheiro recebido costuma vir negativo.
         # Usamos o valor absoluto: entra na base da comissão e é abatido no final.
         if "EATS" in norm(origin):
@@ -488,6 +501,17 @@ def process_report_file(path: Path, import_id: int) -> tuple[int, str]:
                     continue
                 used_reimbursement_columns.add(canonical)
                 resolved = resolve_configured_column(list(r.index), configured)
+                if resolved is not None:
+                    reimb += money(r[resolved])
+
+            # Correção para o formato real exportado pela Uber. Alguns bancos
+            # antigos têm a coluna de reembolso vazia ou com nome desatualizado.
+            # Nesse caso usa exatamente a coluna real de portagem, sem somá-la
+            # duas vezes caso ela já tenha sido encontrada pelo mapeamento.
+            exact_reimbursement_name = "Pago a si:Saldo da viagem:Reembolsos:Portagem"
+            exact_canonical = _canonical_report_header(exact_reimbursement_name)
+            if exact_canonical not in used_reimbursement_columns:
+                resolved = resolve_configured_column(list(r.index), exact_reimbursement_name)
                 if resolved is not None:
                     reimb += money(r[resolved])
         rows.append((import_id, path.name, origin, identifier, (first + " " + last).strip(), gross, cash, reimb))

@@ -20,3 +20,9 @@ Após o deploy, apague as importações de teste, importe novamente os relatóri
 ## Versão 1.2.3
 - Reembolso Uber TVDE: lê e soma exclusivamente as quatro colunas configuradas em `Arquivos_Pgto`, tolerando apenas diferenças técnicas de acentos, espaços, pontuação, quebras de linha e sufixos `.1` adicionados pelo pandas.
 - Sem IBAN: reconhece também valores vazios representados por `-`, `NAN`, `NONE`, `NULL` ou `SEM IBAN` e lista cada cadastro pelo `driver_id`, sem agrupar pessoas diferentes apenas pelo nome.
+
+## Versão 1.2.5
+- Uber TVDE: bruto lido de `Pago a si : Os seus rendimentos`.
+- Uber TVDE: reembolso de portagem lido de `Pago a si:Saldo da viagem:Reembolsos:Portagem` quando o mapeamento antigo não localizar a coluna.
+- Uber TVDE não entra no total de Dinheiro em mãos.
+- Dashboard continua a usar exclusivamente os valores gravados no novo fechamento.
