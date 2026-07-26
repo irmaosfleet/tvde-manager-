@@ -1,3 +1,7 @@
+# IRMÃOS PLATAFORMA 1.2.0
+
+Versão com tema escuro, logo oficial no login/menu, rota da logo corrigida e leitura segura de reembolso TVDE.
+
 # Irmãos Fleet 1.1.8
 
 Correção emergencial da versão 1.1.7.
