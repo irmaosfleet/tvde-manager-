@@ -51,7 +51,7 @@ app.jinja_loader.mapping["manager.html"] = r"""{% extends 'base.html' %}{% block
 app.secret_key = os.getenv("SECRET_KEY", "troque-esta-chave-em-producao")
 app.config["MAX_CONTENT_LENGTH"] = 80 * 1024 * 1024
 COMPANY_NAME = os.getenv("COMPANY_NAME", "Irmãos Fleet")
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.2"
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
@@ -600,6 +600,18 @@ def build_closing(label: str) -> int:
                 app.logger.exception("Linha ignorada durante o fechamento: %r", e)
 
         items = []
+        # Combustível, desconto e imediata são dados fixos do motorista e devem
+        # ser aplicados somente uma vez por fechamento, mesmo quando ele tem
+        # ganhos em TVDE e Delivery. Damos prioridade ao TVDE; se não existir,
+        # aplicamos no Delivery.
+        driver_categories = defaultdict(set)
+        for (driver_id, category) in aggregated.keys():
+            driver_categories[driver_id].add(category)
+        deduction_category = {
+            driver_id: ("TVDE" if "TVDE" in categories else "DELIVERY")
+            for driver_id, categories in driver_categories.items()
+        }
+
         # Consolidação e taxa bancária são feitas por categoria + IBAN.
         iban_groups = defaultdict(float)
         temp = []
@@ -618,12 +630,13 @@ def build_closing(label: str) -> int:
             is_tvde = category == "TVDE"
             commission_base = gross + cash if is_eats else gross
             commission = commission_base * pct
-            fuel_value = fuel_map.get(clean_card_number(d.get("fuel_card")), 0.0)
-            discount = money(d.get("discount"))
+            apply_fixed_deductions = category == deduction_category.get(int(d["id"]), category)
+            fuel_value = fuel_map.get(clean_card_number(d.get("fuel_card")), 0.0) if apply_fixed_deductions else 0.0
+            discount = money(d.get("discount")) if apply_fixed_deductions else 0.0
             reimbursement = (
                 money(d.get("reimbursement")) + money(a["report_reimb"])
             ) if is_tvde else 0.0
-            immediate = money(d.get("immediate"))
+            immediate = money(d.get("immediate")) if apply_fixed_deductions else 0.0
             # Uber Eats: dinheiro em mãos entra na base da comissão e é abatido
             # integralmente no final, porque já está com o motorista.
             if is_eats:
@@ -798,8 +811,18 @@ def dashboard():
         stats = {"gross":0,"commission":0,"fuel":0,"discount":0,"reimbursement":0,"net":0,"payments":0,"missing_iban":0}
         origins = []
         if last:
-            r = con.execute("SELECT COALESCE(SUM(gross),0) gross,COALESCE(SUM(commission),0) commission,COALESCE(SUM(fuel),0) fuel,COALESCE(SUM(discount),0) discount,COALESCE(SUM(reimbursement),0) reimbursement,COALESCE(SUM(net_before_group-bank_fee),0) net,COUNT(DISTINCT iban) payments,SUM(CASE WHEN iban='' THEN 1 ELSE 0 END) missing_iban FROM closing_items WHERE closing_id=?", (last["id"],)).fetchone()
+            r = con.execute("""SELECT COALESCE(SUM(gross),0) gross,
+                COALESCE(SUM(fuel),0) fuel, COALESCE(SUM(discount),0) discount,
+                COALESCE(SUM(reimbursement),0) reimbursement,
+                COALESCE(SUM(net_before_group-bank_fee),0) net,
+                COUNT(DISTINCT CASE WHEN TRIM(COALESCE(iban,''))<>'' THEN iban END) payments,
+                SUM(CASE WHEN TRIM(COALESCE(iban,''))='' THEN 1 ELSE 0 END) missing_iban
+                FROM closing_items WHERE closing_id=?""", (last["id"],)).fetchone()
             stats = dict(r)
+            owner = con.execute("""SELECT COALESCE(SUM(d.commission_owner),0) total
+                FROM drivers d WHERE d.id IN (SELECT DISTINCT driver_id FROM closing_items WHERE closing_id=?)""",
+                (last["id"],)).fetchone()
+            stats["commission"] = float(owner["total"] or 0)
             origins = con.execute("SELECT origins,SUM(gross) total FROM closing_items WHERE closing_id=? GROUP BY origins ORDER BY total DESC", (last["id"],)).fetchall()
         recent = con.execute("SELECT * FROM closings ORDER BY id DESC LIMIT 8").fetchall()
     origin_labels = [row["origins"] or "Sem origem" for row in origins]
@@ -1148,21 +1171,30 @@ def manager_report():
             return render_template("manager.html", closing=None, stats={}, partners=[], negatives=[], missing=[])
         cid = closing["id"]
         raw = con.execute("""SELECT COALESCE(SUM(ci.gross),0) gross, COALESCE(SUM(ci.net_before_group-ci.bank_fee),0) net,
-            COALESCE(SUM(ci.commission),0) commission, COALESCE(SUM(ci.fuel),0) fuel,
-            COALESCE(SUM(ci.discount),0) discount, COALESCE(SUM(ci.reimbursement),0) reimbursement,
-            COALESCE(SUM(ci.cash),0) cash,
-            SUM(CASE WHEN ci.net_before_group-ci.bank_fee<0 THEN 1 ELSE 0 END) negatives,
-            SUM(CASE WHEN TRIM(COALESCE(ci.iban,''))='' THEN 1 ELSE 0 END) missing_iban,
+            COALESCE(SUM(ci.fuel),0) fuel, COALESCE(SUM(ci.discount),0) discount,
+            COALESCE(SUM(ci.reimbursement),0) reimbursement, COALESCE(SUM(ci.cash),0) cash,
+            COUNT(DISTINCT CASE WHEN ci.net_before_group-ci.bank_fee<0 THEN ci.driver_id END) negatives,
+            COUNT(DISTINCT CASE WHEN TRIM(COALESCE(ci.iban,''))='' THEN ci.driver_id END) missing_iban,
             COALESCE(SUM(CASE WHEN UPPER(ci.origins) LIKE 'TVDE%' THEN ci.gross ELSE 0 END),0) tvde,
-            COALESCE(SUM(CASE WHEN UPPER(ci.origins) LIKE 'DELIVERY%' THEN ci.gross ELSE 0 END),0) delivery,
-            COALESCE(SUM(d.partner_commission),0) partner_commission
-            FROM closing_items ci LEFT JOIN drivers d ON d.id=ci.driver_id WHERE ci.closing_id=?""",(cid,)).fetchone()
+            COALESCE(SUM(CASE WHEN UPPER(ci.origins) LIKE 'DELIVERY%' THEN ci.gross ELSE 0 END),0) delivery
+            FROM closing_items ci WHERE ci.closing_id=?""",(cid,)).fetchone()
         stats=dict(raw)
-        partners=con.execute("""SELECT COALESCE(NULLIF(TRIM(d.partner),''),'SEM PARCEIRO') partner, COUNT(DISTINCT ci.driver_id) drivers,
-            COALESCE(SUM(ci.gross),0) gross, COALESCE(SUM(d.partner_commission),0) partner_commission,
-            COALESCE(SUM(ci.net_before_group-ci.bank_fee),0) net
-            FROM closing_items ci LEFT JOIN drivers d ON d.id=ci.driver_id WHERE ci.closing_id=?
-            GROUP BY COALESCE(NULLIF(TRIM(d.partner),''),'SEM PARCEIRO') ORDER BY gross DESC""",(cid,)).fetchall()
+        commissions = con.execute("""SELECT COALESCE(SUM(d.commission_owner),0) commission,
+            COALESCE(SUM(d.partner_commission),0) partner_commission
+            FROM drivers d WHERE d.id IN (SELECT DISTINCT driver_id FROM closing_items WHERE closing_id=?)""",(cid,)).fetchone()
+        stats["commission"] = float(commissions["commission"] or 0)
+        stats["partner_commission"] = float(commissions["partner_commission"] or 0)
+        partners=con.execute("""SELECT base.partner, COUNT(*) drivers,
+            COALESCE(SUM(base.gross),0) gross, COALESCE(SUM(base.partner_commission),0) partner_commission,
+            COALESCE(SUM(base.net),0) net
+            FROM (
+                SELECT ci.driver_id, COALESCE(NULLIF(TRIM(d.partner),''),'SEM PARCEIRO') partner,
+                    MAX(d.partner_commission) partner_commission,
+                    SUM(ci.gross) gross, SUM(ci.net_before_group-ci.bank_fee) net
+                FROM closing_items ci LEFT JOIN drivers d ON d.id=ci.driver_id
+                WHERE ci.closing_id=?
+                GROUP BY ci.driver_id, COALESCE(NULLIF(TRIM(d.partner),''),'SEM PARCEIRO')
+            ) base GROUP BY base.partner ORDER BY gross DESC""",(cid,)).fetchall()
         negatives=con.execute("""SELECT ci.driver_name,ci.origins,COALESCE(d.partner,'') partner,
             ci.net_before_group-ci.bank_fee net FROM closing_items ci LEFT JOIN drivers d ON d.id=ci.driver_id
             WHERE ci.closing_id=? AND ci.net_before_group-ci.bank_fee<0 ORDER BY net""",(cid,)).fetchall()

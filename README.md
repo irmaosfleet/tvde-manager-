@@ -30,3 +30,8 @@ Depois limpe a semana importada, importe novamente os relatórios e gere um novo
 - Botão **Salvar e recalcular** atualiza o cadastro e os fechamentos já processados.
 - Recalcula somente a consolidação por IBAN e a taxa bancária, sem mudar a lógica financeira.
 - Exportação Excel geral e abas separadas por parceiro.
+
+## Versão 1.1.2
+- Corrige duplicação de combustível, descontos e imediata quando o mesmo motorista possui TVDE e Delivery.
+- Comissão da empresa e dos parceiros passa a ser somada uma única vez por motorista ativo.
+- Totais da Dashboard e Área do Gestor revisados.
