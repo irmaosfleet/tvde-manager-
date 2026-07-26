@@ -62,7 +62,7 @@ app.jinja_loader.mapping["manager.html"] = r"""{% extends 'base.html' %}{% block
 app.secret_key = os.getenv("SECRET_KEY", "troque-esta-chave-em-producao")
 app.config["MAX_CONTENT_LENGTH"] = 80 * 1024 * 1024
 COMPANY_NAME = os.getenv("COMPANY_NAME", "IRMÃOS PLATAFORMA")
-APP_VERSION = "1.2.8"
+APP_VERSION = "1.2.9"
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
@@ -561,21 +561,36 @@ def process_report_file(path: Path, import_id: int) -> tuple[int, str]:
             rows,
         )
 
+        existing_rows = con.execute("SELECT external_id,name FROM drivers").fetchall()
         existing_keys = {
             clean_identifier(r["external_id"])
-            for r in con.execute("SELECT external_id FROM drivers").fetchall()
+            for r in existing_rows
             if clean_identifier(r["external_id"])
         }
+        existing_phone_keys = {
+            re.sub(r"\D", "", str(r["external_id"] or ""))[-9:]
+            for r in existing_rows
+            if len(re.sub(r"\D", "", str(r["external_id"] or ""))) >= 9
+        }
+        name_counts = defaultdict(int)
+        for r in existing_rows:
+            nk = norm(r["name"])
+            if nk:
+                name_counts[nk] += 1
         provisional = []
         seen = set()
         created_at = datetime.now().isoformat(timespec="seconds")
         for raw in rows:
             external_id = str(raw[3] or "").strip()
             clean_ext = clean_identifier(external_id)
-            if not clean_ext or clean_ext in existing_keys or clean_ext in seen:
+            display_name = str(raw[4] or "").strip() or external_id
+            phone_key = re.sub(r"\D", "", external_id)[-9:]
+            name_key = norm(display_name)
+            if (not clean_ext or clean_ext in existing_keys or clean_ext in seen
+                    or (len(phone_key) == 9 and phone_key in existing_phone_keys)
+                    or (name_key and name_counts.get(name_key, 0) == 1)):
                 continue
             seen.add(clean_ext)
-            display_name = str(raw[4] or "").strip() or external_id
             provisional.append((
                 external_id, display_name, "", str(raw[2] or ""), "", "YELLOW", 0,
                 "", 0, 0, "", "", 0, 0, 0,
@@ -912,7 +927,7 @@ def _payment_rows(closing_id: int, category: str):
             FROM closing_items
             WHERE closing_id=? AND iban<>'' AND origins LIKE ?
             GROUP BY iban
-            HAVING amount>0
+            HAVING MAX(group_total)>0
             ORDER BY driver_name""",
             (closing_id, prefix),
         ).fetchall()
@@ -1028,7 +1043,7 @@ def dashboard():
             # ou reembolsos. Ela lê diretamente as mesmas linhas utilizadas no
             # relatório geral do fechamento, garantindo totais idênticos.
             r = con.execute("""SELECT
-                    COALESCE(SUM(gross),0) gross,
+                    COALESCE(SUM(CASE WHEN gross>0 THEN gross ELSE 0 END),0) gross,
                     COALESCE(SUM(fuel),0) fuel,
                     COALESCE(SUM(discount),0) discount,
                     COALESCE(SUM(reimbursement),0) reimbursement,
@@ -1052,7 +1067,7 @@ def dashboard():
                 FROM base JOIN drivers d ON d.id=base.driver_id""", (last["id"],)).fetchone()
             stats["commission"] = float(shares["owner_total"] or 0)
             stats["partner_commission"] = float(shares["partner_total"] or 0)
-            origins = con.execute("SELECT origins,SUM(gross) total FROM closing_items WHERE closing_id=? GROUP BY origins ORDER BY total DESC", (last["id"],)).fetchall()
+            origins = con.execute("SELECT origins,SUM(CASE WHEN gross>0 THEN gross ELSE 0 END) total FROM closing_items WHERE closing_id=? GROUP BY origins ORDER BY total DESC", (last["id"],)).fetchall()
             fuel_breakdown = con.execute("""SELECT source_file, COALESCE(SUM(amount),0) total
                 FROM fuel GROUP BY source_file ORDER BY total DESC""").fetchall()
         else:
@@ -1294,43 +1309,30 @@ def missing_iban_page():
     missing_values = "('', '-', '0', '0.0', 'NAN', 'NONE', 'NULL', 'N/A', 'NA', 'SEM IBAN')"
     with db() as con:
         last = con.execute("SELECT id FROM closings WHERE status LIKE 'PROCESSADO%' ORDER BY id DESC LIMIT 1").fetchone()
-        params = []
-        pending_join = "LEFT JOIN (SELECT NULL driver_id, 0 pending_net WHERE 0) p ON p.driver_id=d.id"
-        if last:
-            pending_join = f"""LEFT JOIN (
-                SELECT driver_id, SUM(net_before_group-bank_fee) pending_net
-                FROM closing_items
-                WHERE closing_id=? AND UPPER(TRIM(COALESCE(iban,''))) IN {missing_values}
-                GROUP BY driver_id
-            ) p ON p.driver_id=d.id"""
-            params.append(last["id"])
-        search_sql = ""
-        if q:
-            like = f"%{q}%"
-            search_sql = " AND (d.name LIKE ? OR d.external_id LIKE ? OR d.partner LIKE ? OR d.city LIKE ?)"
-            params.extend([like, like, like, like])
-        # A página mostra TODOS os cadastros sem IBAN, mesmo quando ainda não
-        # existe fechamento ou quando o líquido pendente é zero/negativo.
-        # O fechamento serve apenas para exibir o valor pendente ao lado.
-        rows = con.execute(f"""
-            SELECT d.*, COALESCE(p.pending_net,0) pending_net
-            FROM drivers d
-            {pending_join}
-            WHERE UPPER(TRIM(COALESCE(d.iban,''))) IN {missing_values}
-            {search_sql}
-            ORDER BY CASE WHEN COALESCE(p.pending_net,0)>0 THEN 0 ELSE 1 END, d.name
-            LIMIT 1000
-        """, params).fetchall()
-        total_missing = con.execute(f"SELECT COUNT(*) FROM drivers WHERE UPPER(TRIM(COALESCE(iban,''))) IN {missing_values}").fetchone()[0]
+        rows = []
+        total_missing = 0
         closing_missing = 0
         if last:
-            closing_missing = con.execute(f"""SELECT COUNT(*) FROM (
-                SELECT driver_id
-                FROM closing_items
-                WHERE closing_id=? AND UPPER(TRIM(COALESCE(iban,''))) IN {missing_values}
-                GROUP BY driver_id
-                HAVING SUM(net_before_group-bank_fee)>0
-            )""", (last["id"],)).fetchone()[0]
+            params = [last["id"]]
+            search_sql = ""
+            if q:
+                like = f"%{q}%"
+                search_sql = " AND (d.name LIKE ? OR d.external_id LIKE ? OR d.partner LIKE ? OR d.city LIKE ?)"
+                params.extend([like, like, like, like])
+            rows = con.execute(f"""
+                SELECT d.*, SUM(ci.net_before_group-ci.bank_fee) pending_net
+                FROM closing_items ci
+                JOIN drivers d ON d.id=ci.driver_id
+                WHERE ci.closing_id=?
+                  AND UPPER(TRIM(COALESCE(ci.iban,''))) IN {missing_values}
+                {search_sql}
+                GROUP BY d.id
+                HAVING SUM(ci.net_before_group-ci.bank_fee)>0
+                ORDER BY pending_net DESC, d.name
+                LIMIT 1000
+            """, params).fetchall()
+            closing_missing = len(rows)
+            total_missing = closing_missing
     return render_template("missing_iban.html", rows=rows, q=q, total_missing=total_missing, closing_missing=closing_missing)
 
 
@@ -1524,10 +1526,11 @@ def manager_report():
             per_driver={}
             partners_map={}
             for r in items:
-                stats["gross"] += float(r["gross"] or 0); stats["net"] += float((r["net_before_group"] or 0)-(r["bank_fee"] or 0))
+                positive_gross = max(float(r["gross"] or 0), 0.0)
+                stats["gross"] += positive_gross; stats["net"] += float((r["net_before_group"] or 0)-(r["bank_fee"] or 0))
                 stats["fuel"] += float(r["fuel"] or 0); stats["discount"] += float(r["discount"] or 0); stats["reimbursement"] += float(r["reimbursement"] or 0); stats["cash"] += float(r["cash"] or 0)
-                if str(r["origins"] or '').startswith('TVDE |'): stats["tvde"] += float(r["gross"] or 0)
-                else: stats["delivery"] += float(r["gross"] or 0)
+                if str(r["origins"] or '').startswith('TVDE |'): stats["tvde"] += positive_gross
+                else: stats["delivery"] += positive_gross
                 owner=float(r["owner_share"] or 0); owner=owner/100 if owner>1 else owner
                 pshare=float(r["partner_share"] or 0); pshare=pshare/100 if pshare>1 else pshare
                 stats["commission"] += float(r["commission"] or 0)*owner
@@ -1535,12 +1538,12 @@ def manager_report():
                 did=r["driver_id"]; d=per_driver.setdefault(did,{"driver_name":r["driver_name"],"origins":[],"partner":r["partner"],"net":0.0,"iban":r["iban"] or ''})
                 d["origins"].append(r["origins"] or ''); d["net"] += float((r["net_before_group"] or 0)-(r["bank_fee"] or 0))
                 pn=(r["partner"] or 'SEM PARCEIRO').strip() or 'SEM PARCEIRO'; pm=partners_map.setdefault(pn,{"partner":pn,"ids":set(),"gross":0.0,"partner_commission":0.0,"net":0.0})
-                pm["ids"].add(did); pm["gross"] += float(r["gross"] or 0); pm["partner_commission"] += float(r["commission"] or 0)*pshare; pm["net"] += float((r["net_before_group"] or 0)-(r["bank_fee"] or 0))
+                pm["ids"].add(did); pm["gross"] += positive_gross; pm["partner_commission"] += float(r["commission"] or 0)*pshare; pm["net"] += float((r["net_before_group"] or 0)-(r["bank_fee"] or 0))
             negatives=[]; missing=[]
             for d in per_driver.values():
                 row={"driver_name":d["driver_name"],"origins":" / ".join(dict.fromkeys(d["origins"])),"partner":d["partner"],"net":d["net"]}
                 if d["net"]<0: negatives.append(row)
-                if not str(d["iban"]).strip(): missing.append(row)
+                if not str(d["iban"]).strip() and d["net"]>0: missing.append(row)
             stats["negatives"]=len(negatives); stats["missing_iban"]=len(missing)
             partners=[]
             for pm in partners_map.values():
@@ -1566,7 +1569,7 @@ def manager_excel(closing_id:int):
     with pd.ExcelWriter(out,engine="openpyxl") as writer:
         detail.to_excel(writer,index=False,sheet_name="Geral")
         detail[detail["Liquido"]<0].to_excel(writer,index=False,sheet_name="Negativos")
-        detail[detail["IBAN"].fillna("").str.strip()==""].to_excel(writer,index=False,sheet_name="Sem_IBAN")
+        detail[(detail["IBAN"].fillna("").str.strip()=="") & (detail["Liquido"]>0)].to_excel(writer,index=False,sheet_name="Sem_IBAN")
         if not detail.empty:
             resumo=detail.groupby(detail["Parceiro"].fillna("").replace("","SEM PARCEIRO"),dropna=False).agg(Motoristas=("Motorista","nunique"),Bruto=("Bruto","sum"),Comissao_Parceiro=("Comissao_Parceiro","sum"),Liquido=("Liquido","sum")).reset_index()
             resumo.to_excel(writer,index=False,sheet_name="Parceiros")

@@ -26,3 +26,10 @@ Após o deploy, apague as importações de teste, importe novamente os relatóri
 - Uber TVDE: reembolso de portagem lido de `Pago a si:Saldo da viagem:Reembolsos:Portagem` quando o mapeamento antigo não localizar a coluna.
 - Uber TVDE não entra no total de Dinheiro em mãos.
 - Dashboard continua a usar exclusivamente os valores gravados no novo fechamento.
+
+## Versão 1.2.9
+- Bruto da Dashboard e Área do Gestor soma apenas valores positivos da coluna bruta.
+- Valores negativos permanecem no relatório de negativos e não reduzem o cartão de bruto total.
+- Sem IBAN mostra somente pagamentos líquidos positivos do último fechamento.
+- XML mantém somente grupos consolidados com valor positivo.
+- Evita criar cadastros provisórios duplicados quando já existe motorista correspondente por ID, telefone ou nome único.
