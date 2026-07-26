@@ -56,7 +56,7 @@ app.jinja_loader.mapping["manager.html"] = r"""{% extends 'base.html' %}{% block
 app.secret_key = os.getenv("SECRET_KEY", "troque-esta-chave-em-producao")
 app.config["MAX_CONTENT_LENGTH"] = 80 * 1024 * 1024
 COMPANY_NAME = os.getenv("COMPANY_NAME", "Irmãos Fleet")
-APP_VERSION = "1.1.8"
+APP_VERSION = "1.1.9"
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
@@ -863,6 +863,19 @@ def login():
             return redirect(url_for("dashboard"))
         flash("Utilizador ou senha incorretos.", "danger")
     return render_template("login.html")
+
+
+@app.route("/company-logo")
+def company_logo():
+    """Entrega a logo usada no login e no menu sem depender da pasta static."""
+    logo_path = BASE_DIR / "logo_empresa.png"
+    if not logo_path.exists():
+        # Fallback transparente para nunca derrubar o login por falta do ficheiro.
+        from flask import Response
+        import base64
+        pixel = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+        return Response(pixel, mimetype="image/png")
+    return send_file(logo_path, mimetype="image/png", max_age=3600)
 
 
 @app.route("/logout")
