@@ -62,7 +62,7 @@ app.jinja_loader.mapping["manager.html"] = r"""{% extends 'base.html' %}{% block
 app.secret_key = os.getenv("SECRET_KEY", "troque-esta-chave-em-producao")
 app.config["MAX_CONTENT_LENGTH"] = 80 * 1024 * 1024
 COMPANY_NAME = os.getenv("COMPANY_NAME", "IRMÃOS PLATAFORMA")
-APP_VERSION = "1.2.5"
+APP_VERSION = "1.2.6"
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
@@ -79,6 +79,12 @@ def norm(v: Any) -> str:
     s = "" if v is None else str(v).strip()
     s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
     return re.sub(r"\s+", " ", s).upper()
+
+
+def is_uber_tvde_origin(v: Any) -> bool:
+    """Aceita as duas formas usadas no projeto: UBER_TVDE e UBER TVDE."""
+    key = norm(v).replace("_", " ")
+    return "UBER TVDE" in key
 
 
 def clean_identifier(v: Any) -> str:
@@ -452,6 +458,33 @@ def correct_origin_by_file_and_columns(filename: str, mapping, columns: list[str
     return result
 
 
+def ensure_provisional_driver(identifier: Any, display_name: Any, origin: Any) -> None:
+    """Cria cadastro mínimo para motorista novo aparecer em Sem IBAN.
+
+    O cadastro completo continua podendo ser importado depois pelo Banco_de_Dados.
+    Não substitui nem altera motorista já existente.
+    """
+    external_id = str(identifier or "").strip()
+    clean_ext = clean_identifier(external_id)
+    if not clean_ext:
+        return
+    name = str(display_name or "").strip() or external_id
+    with db() as con:
+        existing = con.execute("SELECT id,external_id FROM drivers").fetchall()
+        if any(clean_identifier(r["external_id"]) == clean_ext for r in existing):
+            return
+        con.execute(
+            """INSERT INTO drivers(
+                external_id,name,city,company,iban,bank_color,commission_owner,
+                partner,partner_commission,percentage,fuel_card,rental_label,
+                discount,reimbursement,immediate,observation,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (external_id, name, "", str(origin or ""), "", "YELLOW", 0,
+             "", 0, 0, "", "", 0, 0, 0,
+             "Cadastro automático: motorista novo encontrado no relatório; complete os dados.", now()),
+        )
+
+
 def process_report_file(path: Path, import_id: int) -> tuple[int, str]:
     df = read_csv_flexible(path)
     mapping = find_mapping(path.name, list(df.columns))
@@ -473,7 +506,7 @@ def process_report_file(path: Path, import_id: int) -> tuple[int, str]:
         # Uber TVDE: o campo "Pago a si" inclui ajustes/reembolsos e, por isso,
         # não deve ser usado como bruto. O bruto correto é "Pago a si : Os seus
         # rendimentos"; o reembolso entra separadamente mais abaixo.
-        if "UBER TVDE" in norm(origin):
+        if is_uber_tvde_origin(origin):
             tvde_gross_column = resolve_configured_column(
                 list(r.index), "Pago a si : Os seus rendimentos"
             )
@@ -492,7 +525,7 @@ def process_report_file(path: Path, import_id: int) -> tuple[int, str]:
         # na aba Arquivos_Pgto (Reembolso_1 a Reembolso_4). O sistema não
         # procura palavras parecidas e não tenta adivinhar cabeçalhos.
         reimb = 0.0
-        if "UBER TVDE" in norm(origin):
+        if is_uber_tvde_origin(origin):
             used_reimbursement_columns = set()
             for key in ("reimbursement_1", "reimbursement_2", "reimbursement_3", "reimbursement_4"):
                 configured = str(mapping.get(key, "") or "").strip()
@@ -520,6 +553,10 @@ def process_report_file(path: Path, import_id: int) -> tuple[int, str]:
         return 0, "Ficheiro válido, mas sem linhas de pagamento."
     with db() as con:
         con.executemany("INSERT INTO raw_earnings(import_id,filename,origin_ref,identifier,display_name,gross,cash,reimbursement) VALUES(?,?,?,?,?,?,?,?)", rows)
+    # Motoristas novos passam a aparecer imediatamente em Sem IBAN, mesmo
+    # antes de existirem no ficheiro Banco_de_Dados.
+    for raw in rows:
+        ensure_provisional_driver(raw[3], raw[4], raw[2])
     reimbursement_total = sum(money(r[7]) for r in rows)
     if "TVDE" in norm(origin):
         return count, f"{origin}: {count} linhas · reembolsos € {reimbursement_total:.2f}"
@@ -659,6 +696,12 @@ def build_closing(label: str) -> int:
         for e in earnings:
             try:
                 driver = find_driver(e.get("identifier"), e.get("origin_ref"), e.get("display_name"))
+                if not driver:
+                    ensure_provisional_driver(e.get("identifier"), e.get("display_name"), e.get("origin_ref"))
+                    ident = clean_identifier(e.get("identifier"))
+                    with db() as lookup_con:
+                        candidates = lookup_con.execute("SELECT * FROM drivers").fetchall()
+                    driver = next((dict(r) for r in candidates if clean_identifier(r["external_id"]) == ident), None)
                 if not driver:
                     unmatched += 1
                     continue
