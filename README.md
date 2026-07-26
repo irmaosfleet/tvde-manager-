@@ -1,13 +1,11 @@
-# IRMÃOS PLATAFORMA 1.2.0
+IRMÃOS PLATAFORMA 1.2.1
 
-Versão com tema escuro, logo oficial no login/menu, rota da logo corrigida e leitura segura de reembolso TVDE.
+Correções desta versão:
+- Dashboard usa exatamente os totais do relatório geral do fechamento, inclusive dinheiro em mãos.
+- Desconto duplicado em cadastros Uber/Bolt é consolidado por motorista e cobrado uma única vez; se houver valores diferentes, usa o maior.
+- Reembolso Uber TVDE lê exatamente as colunas Reembolso_1 a Reembolso_4 configuradas em Arquivos_Pgto.
+- Sem IBAN mostra apenas pagamentos positivos pendentes do último fechamento.
+- Ao salvar um IBAN, todos os cadastros duplicados do mesmo motorista são atualizados e o fechamento é recalculado.
+- Correção do envio do campo Banco no formulário Sem IBAN.
 
-# Irmãos Fleet 1.1.8
-
-Correção emergencial da versão 1.1.7.
-
-- tema noturno cinza aplicado;
-- logo real no menu e login;
-- Área do Gestor protegida contra erro 500;
-- reembolso limitado a colunas explicitamente identificadas como reembolso;
-- não considerar Ajustes após a viagem nem Imposto sobre a tarifa como reembolso.
+Após o deploy, apague as importações de teste, importe novamente os relatórios e gere um novo fechamento para reler os reembolsos e aplicar a consolidação dos descontos.
