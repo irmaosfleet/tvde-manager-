@@ -51,7 +51,7 @@ app.jinja_loader.mapping["manager.html"] = r"""{% extends 'base.html' %}{% block
 app.secret_key = os.getenv("SECRET_KEY", "troque-esta-chave-em-producao")
 app.config["MAX_CONTENT_LENGTH"] = 80 * 1024 * 1024
 COMPANY_NAME = os.getenv("COMPANY_NAME", "Irmãos Fleet")
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.1.4"
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
@@ -362,14 +362,26 @@ def find_mapping(filename: str, columns: list[str]):
     return None
 
 
+def canonical_column(v: Any) -> str:
+    """Compara cabeçalhos ignorando acentos, espaços e pontuação.
+
+    Os CSVs da Uber variam entre, por exemplo, ``Pago a si:Saldo`` e
+    ``Pago a si : Saldo``. A comparação anterior considerava esses nomes
+    diferentes e os campos de reembolso acabavam lidos como zero.
+    """
+    return re.sub(r"[^A-Z0-9]", "", norm(v))
+
+
 def col_value(row: pd.Series, col: str) -> Any:
     if not col or col == "-":
         return 0
     if col in row.index:
         return row[col]
-    target = norm(col)
+    target = canonical_column(col)
+    if not target:
+        return 0
     for c in row.index:
-        if norm(c) == target:
+        if canonical_column(c) == target:
             return row[c]
     return 0
 
@@ -437,6 +449,9 @@ def process_report_file(path: Path, import_id: int) -> tuple[int, str]:
         return 0, "Ficheiro válido, mas sem linhas de pagamento."
     with db() as con:
         con.executemany("INSERT INTO raw_earnings(import_id,filename,origin_ref,identifier,display_name,gross,cash,reimbursement) VALUES(?,?,?,?,?,?,?,?)", rows)
+    reimbursement_total = sum(money(r[7]) for r in rows)
+    if "TVDE" in norm(origin):
+        return count, f"{origin}: {count} linhas · reembolsos € {reimbursement_total:.2f}"
     return count, f"{origin}: {count} linhas"
 
 
@@ -811,18 +826,42 @@ def dashboard():
         stats = {"gross":0,"commission":0,"fuel":0,"discount":0,"reimbursement":0,"net":0,"payments":0,"missing_iban":0}
         origins = []
         if last:
-            r = con.execute("""SELECT COALESCE(SUM(gross),0) gross,
-                COALESCE(SUM(fuel),0) fuel, COALESCE(SUM(discount),0) discount,
-                COALESCE(SUM(reimbursement),0) reimbursement,
-                COALESCE(SUM(net_before_group-bank_fee),0) net,
-                COUNT(DISTINCT CASE WHEN TRIM(COALESCE(iban,''))<>'' THEN iban END) payments,
-                SUM(CASE WHEN TRIM(COALESCE(iban,''))='' THEN 1 ELSE 0 END) missing_iban
-                FROM closing_items WHERE closing_id=?""", (last["id"],)).fetchone()
+            # A dashboard trabalha com uma linha única por motorista/categoria.
+            # Isto impede que linhas repetidas de um fechamento antigo dobrem combustível,
+            # descontos, dinheiro em mãos ou outros ajustes.
+            r = con.execute("""WITH base AS (
+                    SELECT driver_id, category,
+                        MAX(gross) gross, MAX(cash) cash, MAX(commission) commission,
+                        MAX(fuel) fuel, MAX(discount) discount,
+                        MAX(reimbursement) reimbursement, MAX(immediate) immediate,
+                        MAX(net_before_group) net_before_group, MAX(bank_fee) bank_fee,
+                        MAX(iban) iban
+                    FROM closing_items WHERE closing_id=?
+                    GROUP BY driver_id, category
+                )
+                SELECT COALESCE(SUM(gross),0) gross,
+                    COALESCE(SUM(fuel),0) fuel, COALESCE(SUM(discount),0) discount,
+                    COALESCE(SUM(reimbursement),0) reimbursement,
+                    COALESCE(SUM(cash),0) cash,
+                    COALESCE(SUM(net_before_group-bank_fee),0) net,
+                    COUNT(DISTINCT CASE WHEN TRIM(COALESCE(iban,''))<>'' THEN iban END) payments,
+                    COUNT(DISTINCT CASE WHEN TRIM(COALESCE(iban,''))='' THEN driver_id END) missing_iban
+                FROM base""", (last["id"],)).fetchone()
             stats = dict(r)
-            owner = con.execute("""SELECT COALESCE(SUM(d.commission_owner),0) total
-                FROM drivers d WHERE d.id IN (SELECT DISTINCT driver_id FROM closing_items WHERE closing_id=?)""",
-                (last["id"],)).fetchone()
-            stats["commission"] = float(owner["total"] or 0)
+            shares = con.execute("""WITH base AS (
+                    SELECT driver_id, category, MAX(commission) commission
+                    FROM closing_items WHERE closing_id=? GROUP BY driver_id, category
+                )
+                SELECT
+                    COALESCE(SUM(base.commission * CASE
+                        WHEN COALESCE(d.commission_owner,0)>1 THEN d.commission_owner/100.0
+                        ELSE COALESCE(d.commission_owner,0) END),0) owner_total,
+                    COALESCE(SUM(base.commission * CASE
+                        WHEN COALESCE(d.partner_commission,0)>1 THEN d.partner_commission/100.0
+                        ELSE COALESCE(d.partner_commission,0) END),0) partner_total
+                FROM base JOIN drivers d ON d.id=base.driver_id""", (last["id"],)).fetchone()
+            stats["commission"] = float(shares["owner_total"] or 0)
+            stats["partner_commission"] = float(shares["partner_total"] or 0)
             origins = con.execute("SELECT origins,SUM(gross) total FROM closing_items WHERE closing_id=? GROUP BY origins ORDER BY total DESC", (last["id"],)).fetchall()
         recent = con.execute("SELECT * FROM closings ORDER BY id DESC LIMIT 8").fetchall()
     origin_labels = [row["origins"] or "Sem origem" for row in origins]
@@ -1170,18 +1209,34 @@ def manager_report():
         if not closing:
             return render_template("manager.html", closing=None, stats={}, partners=[], negatives=[], missing=[])
         cid = closing["id"]
-        raw = con.execute("""SELECT COALESCE(SUM(ci.gross),0) gross, COALESCE(SUM(ci.net_before_group-ci.bank_fee),0) net,
-            COALESCE(SUM(ci.fuel),0) fuel, COALESCE(SUM(ci.discount),0) discount,
-            COALESCE(SUM(ci.reimbursement),0) reimbursement, COALESCE(SUM(ci.cash),0) cash,
-            COUNT(DISTINCT CASE WHEN ci.net_before_group-ci.bank_fee<0 THEN ci.driver_id END) negatives,
-            COUNT(DISTINCT CASE WHEN TRIM(COALESCE(ci.iban,''))='' THEN ci.driver_id END) missing_iban,
-            COALESCE(SUM(CASE WHEN UPPER(ci.origins) LIKE 'TVDE%' THEN ci.gross ELSE 0 END),0) tvde,
-            COALESCE(SUM(CASE WHEN UPPER(ci.origins) LIKE 'DELIVERY%' THEN ci.gross ELSE 0 END),0) delivery
-            FROM closing_items ci WHERE ci.closing_id=?""",(cid,)).fetchone()
+        raw = con.execute("""WITH base AS (
+                SELECT driver_id, category, MAX(origins) origins,
+                    MAX(gross) gross, MAX(cash) cash, MAX(commission) commission,
+                    MAX(fuel) fuel, MAX(discount) discount,
+                    MAX(reimbursement) reimbursement, MAX(immediate) immediate,
+                    MAX(net_before_group) net_before_group, MAX(bank_fee) bank_fee,
+                    MAX(iban) iban
+                FROM closing_items WHERE closing_id=? GROUP BY driver_id, category
+            )
+            SELECT COALESCE(SUM(gross),0) gross, COALESCE(SUM(net_before_group-bank_fee),0) net,
+                COALESCE(SUM(fuel),0) fuel, COALESCE(SUM(discount),0) discount,
+                COALESCE(SUM(reimbursement),0) reimbursement, COALESCE(SUM(cash),0) cash,
+                COUNT(DISTINCT CASE WHEN net_before_group-bank_fee<0 THEN driver_id END) negatives,
+                COUNT(DISTINCT CASE WHEN TRIM(COALESCE(iban,''))='' THEN driver_id END) missing_iban,
+                COALESCE(SUM(CASE WHEN UPPER(category)='TVDE' THEN gross ELSE 0 END),0) tvde,
+                COALESCE(SUM(CASE WHEN UPPER(category)='DELIVERY' THEN gross ELSE 0 END),0) delivery
+            FROM base""",(cid,)).fetchone()
         stats=dict(raw)
-        commissions = con.execute("""SELECT COALESCE(SUM(d.commission_owner),0) commission,
-            COALESCE(SUM(d.partner_commission),0) partner_commission
-            FROM drivers d WHERE d.id IN (SELECT DISTINCT driver_id FROM closing_items WHERE closing_id=?)""",(cid,)).fetchone()
+        commissions = con.execute("""WITH base AS (
+                SELECT driver_id, category, MAX(commission) commission
+                FROM closing_items WHERE closing_id=? GROUP BY driver_id, category
+            )
+            SELECT
+                COALESCE(SUM(base.commission * CASE WHEN COALESCE(d.commission_owner,0)>1
+                    THEN d.commission_owner/100.0 ELSE COALESCE(d.commission_owner,0) END),0) commission,
+                COALESCE(SUM(base.commission * CASE WHEN COALESCE(d.partner_commission,0)>1
+                    THEN d.partner_commission/100.0 ELSE COALESCE(d.partner_commission,0) END),0) partner_commission
+            FROM base JOIN drivers d ON d.id=base.driver_id""",(cid,)).fetchone()
         stats["commission"] = float(commissions["commission"] or 0)
         stats["partner_commission"] = float(commissions["partner_commission"] or 0)
         partners=con.execute("""SELECT base.partner, COUNT(*) drivers,
@@ -1189,7 +1244,8 @@ def manager_report():
             COALESCE(SUM(base.net),0) net
             FROM (
                 SELECT ci.driver_id, COALESCE(NULLIF(TRIM(d.partner),''),'SEM PARCEIRO') partner,
-                    MAX(d.partner_commission) partner_commission,
+                    SUM(ci.commission * CASE WHEN COALESCE(d.partner_commission,0)>1
+                        THEN d.partner_commission/100.0 ELSE COALESCE(d.partner_commission,0) END) partner_commission,
                     SUM(ci.gross) gross, SUM(ci.net_before_group-ci.bank_fee) net
                 FROM closing_items ci LEFT JOIN drivers d ON d.id=ci.driver_id
                 WHERE ci.closing_id=?

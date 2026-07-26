@@ -35,3 +35,9 @@ Depois limpe a semana importada, importe novamente os relatórios e gere um novo
 - Corrige duplicação de combustível, descontos e imediata quando o mesmo motorista possui TVDE e Delivery.
 - Comissão da empresa e dos parceiros passa a ser somada uma única vez por motorista ativo.
 - Totais da Dashboard e Área do Gestor revisados.
+
+
+## Versão 1.1.4
+- Corrige os indicadores da Dashboard e Área do Gestor.
+- Comissão da empresa e do parceiro agora é a comissão calculada multiplicada pela participação de cada um no banco de dados.
+- Totais são deduplicados por motorista e categoria para não dobrar combustível, descontos e dinheiro em mãos.
