@@ -62,7 +62,7 @@ app.jinja_loader.mapping["manager.html"] = r"""{% extends 'base.html' %}{% block
 app.secret_key = os.getenv("SECRET_KEY", "troque-esta-chave-em-producao")
 app.config["MAX_CONTENT_LENGTH"] = 80 * 1024 * 1024
 COMPANY_NAME = os.getenv("COMPANY_NAME", "IRMÃOS PLATAFORMA")
-APP_VERSION = "1.2.2"
+APP_VERSION = "1.2.3"
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
@@ -107,7 +107,11 @@ def money(v: Any) -> float:
     if isinstance(v, (int, float)):
         return float(v)
     s = str(v).strip().replace("€", "").replace(" ", "")
-    if not s or s in {"-", "NAN", "NONE"}:
+    s = s.replace("−", "-").replace("–", "-")
+    negative_parentheses = s.startswith("(") and s.endswith(")")
+    if negative_parentheses:
+        s = s[1:-1]
+    if not s or s.upper() in {"-", "NAN", "NONE", "NULL"}:
         return 0.0
     if "," in s and "." in s:
         if s.rfind(",") > s.rfind("."):
@@ -117,7 +121,8 @@ def money(v: Any) -> float:
     elif "," in s:
         s = s.replace(".", "").replace(",", ".")
     try:
-        return float(s)
+        value = float(s)
+        return -value if negative_parentheses else value
     except ValueError:
         return 0.0
 
@@ -383,18 +388,35 @@ def canonical_column(v: Any) -> str:
     return re.sub(r"[^A-Z0-9]", "", norm(v))
 
 
-def col_value(row: pd.Series, col: str) -> Any:
-    if not col or col == "-":
-        return 0
-    if col in row.index:
-        return row[col]
-    target = canonical_column(col)
+def _canonical_report_header(v: Any) -> str:
+    # O pandas acrescenta .1, .2... quando existem cabeçalhos repetidos.
+    # Esse sufixo não faz parte do nome configurado em Arquivos_Pgto.
+    text = re.sub(r"\.\d+$", "", str(v or "").strip())
+    return canonical_column(text)
+
+
+def resolve_configured_column(columns: list[Any], configured: str) -> Any | None:
+    """Resolve somente o cabeçalho configurado em Arquivos_Pgto.
+
+    Não tenta adivinhar colunas por palavras. Apenas ignora diferenças de
+    acentos, espaços, pontuação, quebras de linha e o sufixo .1 do pandas.
+    """
+    if not configured or str(configured).strip() == "-":
+        return None
+    if configured in columns:
+        return configured
+    target = _canonical_report_header(configured)
     if not target:
-        return 0
-    for c in row.index:
-        if canonical_column(c) == target:
-            return row[c]
-    return 0
+        return None
+    for column in columns:
+        if _canonical_report_header(column) == target:
+            return column
+    return None
+
+
+def col_value(row: pd.Series, col: str) -> Any:
+    resolved = resolve_configured_column(list(row.index), col)
+    return row[resolved] if resolved is not None else 0
 
 
 def correct_origin_by_file_and_columns(filename: str, mapping, columns: list[str]):
@@ -457,15 +479,17 @@ def process_report_file(path: Path, import_id: int) -> tuple[int, str]:
         # na aba Arquivos_Pgto (Reembolso_1 a Reembolso_4). O sistema não
         # procura palavras parecidas e não tenta adivinhar cabeçalhos.
         reimb = 0.0
-        if "TVDE" in norm(origin):
+        if "UBER_TVDE" in norm(origin):
             used_reimbursement_columns = set()
             for key in ("reimbursement_1", "reimbursement_2", "reimbursement_3", "reimbursement_4"):
                 configured = str(mapping.get(key, "") or "").strip()
-                canonical = canonical_column(configured)
+                canonical = _canonical_report_header(configured)
                 if not configured or configured == "-" or not canonical or canonical in used_reimbursement_columns:
                     continue
                 used_reimbursement_columns.add(canonical)
-                reimb += money(col_value(r, configured))
+                resolved = resolve_configured_column(list(r.index), configured)
+                if resolved is not None:
+                    reimb += money(r[resolved])
         rows.append((import_id, path.name, origin, identifier, (first + " " + last).strip(), gross, cash, reimb))
         count += 1
     if not rows and len(df.index) == 0:
@@ -1159,6 +1183,9 @@ def refresh_closing_payment_groups(closing_id: int) -> None:
             for r in items:
                 con.execute("UPDATE closing_items SET group_total=?, bank_fee=? WHERE id=?", (total, 1.25 if charge_fee and r["id"] == first_id else 0.0, r["id"]))
 
+MISSING_IBAN_SQL = "UPPER(TRIM(COALESCE({col},''))) IN ('', '-', 'NAN', 'NONE', 'NULL', 'SEM IBAN')"
+
+
 @app.route("/missing-iban")
 @login_required
 def missing_iban_page():
@@ -1175,11 +1202,11 @@ def missing_iban_page():
                 search_sql = " AND (d.name LIKE ? OR d.external_id LIKE ? OR d.partner LIKE ? OR d.city LIKE ?)"
                 params.extend([like, like, like, like])
             rows = con.execute(f"""WITH pending AS (
-                    SELECT MIN(ci.driver_id) driver_id, ci.driver_name,
+                    SELECT ci.driver_id, MAX(ci.driver_name) driver_name,
                         SUM(ci.net_before_group-ci.bank_fee) pending_net
                     FROM closing_items ci
-                    WHERE ci.closing_id=? AND TRIM(COALESCE(ci.iban,''))=''
-                    GROUP BY UPPER(TRIM(ci.driver_name))
+                    WHERE ci.closing_id=? AND UPPER(TRIM(COALESCE(ci.iban,''))) IN ('', '-', 'NAN', 'NONE', 'NULL', 'SEM IBAN')
+                    GROUP BY ci.driver_id
                     HAVING SUM(ci.net_before_group-ci.bank_fee)>0
                 )
                 SELECT d.*, p.pending_net
@@ -1187,13 +1214,13 @@ def missing_iban_page():
                 WHERE 1=1 {search_sql}
                 ORDER BY d.name LIMIT 500""", params).fetchall()
             closing_missing = len(rows) if not q else con.execute("""SELECT COUNT(*) FROM (
-                    SELECT UPPER(TRIM(driver_name))
+                    SELECT driver_id
                     FROM closing_items
-                    WHERE closing_id=? AND TRIM(COALESCE(iban,''))=''
-                    GROUP BY UPPER(TRIM(driver_name))
+                    WHERE closing_id=? AND UPPER(TRIM(COALESCE(iban,''))) IN ('', '-', 'NAN', 'NONE', 'NULL', 'SEM IBAN')
+                    GROUP BY driver_id
                     HAVING SUM(net_before_group-bank_fee)>0
                 )""", (last["id"],)).fetchone()[0]
-        total_missing = con.execute("SELECT COUNT(*) FROM drivers WHERE TRIM(COALESCE(iban,''))='' ").fetchone()[0]
+        total_missing = con.execute("SELECT COUNT(*) FROM drivers WHERE UPPER(TRIM(COALESCE(iban,''))) IN ('', '-', 'NAN', 'NONE', 'NULL', 'SEM IBAN') ").fetchone()[0]
     return render_template("missing_iban.html", rows=rows, q=q, total_missing=total_missing, closing_missing=closing_missing)
 
 
@@ -1228,8 +1255,8 @@ def save_missing_iban(driver_id: int):
         now = datetime.now().isoformat(timespec="seconds")
         con.execute(f"UPDATE drivers SET iban=?,bank_color=?,partner=?,partner_commission=?,updated_at=? WHERE id IN ({placeholders})",
                     [iban, bank_color, partner, partner_commission, now, *related_ids])
-        closings = con.execute(f"SELECT DISTINCT closing_id FROM closing_items WHERE driver_id IN ({placeholders}) AND TRIM(COALESCE(iban,''))=''", related_ids).fetchall()
-        con.execute(f"UPDATE closing_items SET iban=?,bank_color=? WHERE driver_id IN ({placeholders}) AND TRIM(COALESCE(iban,''))=''",
+        closings = con.execute(f"SELECT DISTINCT closing_id FROM closing_items WHERE driver_id IN ({placeholders}) AND UPPER(TRIM(COALESCE(iban,''))) IN ('', '-', 'NAN', 'NONE', 'NULL', 'SEM IBAN')", related_ids).fetchall()
+        con.execute(f"UPDATE closing_items SET iban=?,bank_color=? WHERE driver_id IN ({placeholders}) AND UPPER(TRIM(COALESCE(iban,''))) IN ('', '-', 'NAN', 'NONE', 'NULL', 'SEM IBAN')",
                     [iban, bank_color, *related_ids])
     for row in closings:
         refresh_closing_payment_groups(row["closing_id"])
@@ -1241,7 +1268,7 @@ def save_missing_iban(driver_id: int):
 @login_required
 def missing_iban_excel():
     with db() as con:
-        df = pd.read_sql_query("SELECT name AS Motorista,external_id AS ID,city AS Cidade,company AS Companhia,partner AS Parceiro,partner_commission AS Comissao_Parceiro,bank_color AS Banco,iban AS IBAN FROM drivers WHERE TRIM(COALESCE(iban,''))='' ORDER BY name", con)
+        df = pd.read_sql_query("SELECT name AS Motorista,external_id AS ID,city AS Cidade,company AS Companhia,partner AS Parceiro,partner_commission AS Comissao_Parceiro,bank_color AS Banco,iban AS IBAN FROM drivers WHERE UPPER(TRIM(COALESCE(iban,''))) IN ('', '-', 'NAN', 'NONE', 'NULL', 'SEM IBAN') ORDER BY name", con)
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Sem_IBAN")

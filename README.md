@@ -16,3 +16,7 @@ Após o deploy, apague as importações de teste, importe novamente os relatóri
 - Atualização de IBAN baseada no identificador externo da plataforma, evitando alterar homónimos.
 - Dashboard continua a ler os totais diretamente do fechamento, sem recalcular bruto, dinheiro, combustível, descontos ou reembolsos.
 - Versão da aplicação atualizada para 1.2.2.
+
+## Versão 1.2.3
+- Reembolso Uber TVDE: lê e soma exclusivamente as quatro colunas configuradas em `Arquivos_Pgto`, tolerando apenas diferenças técnicas de acentos, espaços, pontuação, quebras de linha e sufixos `.1` adicionados pelo pandas.
+- Sem IBAN: reconhece também valores vazios representados por `-`, `NAN`, `NONE`, `NULL` ou `SEM IBAN` e lista cada cadastro pelo `driver_id`, sem agrupar pessoas diferentes apenas pelo nome.
