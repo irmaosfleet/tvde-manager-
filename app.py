@@ -62,7 +62,7 @@ app.jinja_loader.mapping["manager.html"] = r"""{% extends 'base.html' %}{% block
 app.secret_key = os.getenv("SECRET_KEY", "troque-esta-chave-em-producao")
 app.config["MAX_CONTENT_LENGTH"] = 80 * 1024 * 1024
 COMPANY_NAME = os.getenv("COMPANY_NAME", "IRMÃOS PLATAFORMA")
-APP_VERSION = "1.2.3"
+APP_VERSION = "1.2.4"
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
@@ -479,7 +479,7 @@ def process_report_file(path: Path, import_id: int) -> tuple[int, str]:
         # na aba Arquivos_Pgto (Reembolso_1 a Reembolso_4). O sistema não
         # procura palavras parecidas e não tenta adivinhar cabeçalhos.
         reimb = 0.0
-        if "UBER_TVDE" in norm(origin):
+        if "UBER TVDE" in norm(origin):
             used_reimbursement_columns = set()
             for key in ("reimbursement_1", "reimbursement_2", "reimbursement_3", "reimbursement_4"):
                 configured = str(mapping.get(key, "") or "").strip()
@@ -1183,44 +1183,53 @@ def refresh_closing_payment_groups(closing_id: int) -> None:
             for r in items:
                 con.execute("UPDATE closing_items SET group_total=?, bank_fee=? WHERE id=?", (total, 1.25 if charge_fee and r["id"] == first_id else 0.0, r["id"]))
 
-MISSING_IBAN_SQL = "UPPER(TRIM(COALESCE({col},''))) IN ('', '-', 'NAN', 'NONE', 'NULL', 'SEM IBAN')"
+MISSING_IBAN_SQL = "UPPER(TRIM(COALESCE({col},''))) IN ('', '-', '0', '0.0', 'NAN', 'NONE', 'NULL', 'N/A', 'NA', 'SEM IBAN')"
 
 
 @app.route("/missing-iban")
 @login_required
 def missing_iban_page():
     q = request.args.get("q", "").strip()
+    missing_values = "('', '-', '0', '0.0', 'NAN', 'NONE', 'NULL', 'N/A', 'NA', 'SEM IBAN')"
     with db() as con:
         last = con.execute("SELECT id FROM closings WHERE status LIKE 'PROCESSADO%' ORDER BY id DESC LIMIT 1").fetchone()
-        rows = []
+        params = []
+        pending_join = "LEFT JOIN (SELECT NULL driver_id, 0 pending_net WHERE 0) p ON p.driver_id=d.id"
+        if last:
+            pending_join = f"""LEFT JOIN (
+                SELECT driver_id, SUM(net_before_group-bank_fee) pending_net
+                FROM closing_items
+                WHERE closing_id=? AND UPPER(TRIM(COALESCE(iban,''))) IN {missing_values}
+                GROUP BY driver_id
+            ) p ON p.driver_id=d.id"""
+            params.append(last["id"])
+        search_sql = ""
+        if q:
+            like = f"%{q}%"
+            search_sql = " AND (d.name LIKE ? OR d.external_id LIKE ? OR d.partner LIKE ? OR d.city LIKE ?)"
+            params.extend([like, like, like, like])
+        # A página mostra TODOS os cadastros sem IBAN, mesmo quando ainda não
+        # existe fechamento ou quando o líquido pendente é zero/negativo.
+        # O fechamento serve apenas para exibir o valor pendente ao lado.
+        rows = con.execute(f"""
+            SELECT d.*, COALESCE(p.pending_net,0) pending_net
+            FROM drivers d
+            {pending_join}
+            WHERE UPPER(TRIM(COALESCE(d.iban,''))) IN {missing_values}
+            {search_sql}
+            ORDER BY CASE WHEN COALESCE(p.pending_net,0)>0 THEN 0 ELSE 1 END, d.name
+            LIMIT 1000
+        """, params).fetchall()
+        total_missing = con.execute(f"SELECT COUNT(*) FROM drivers WHERE UPPER(TRIM(COALESCE(iban,''))) IN {missing_values}").fetchone()[0]
         closing_missing = 0
         if last:
-            params = [last["id"]]
-            search_sql = ""
-            if q:
-                like = f"%{q}%"
-                search_sql = " AND (d.name LIKE ? OR d.external_id LIKE ? OR d.partner LIKE ? OR d.city LIKE ?)"
-                params.extend([like, like, like, like])
-            rows = con.execute(f"""WITH pending AS (
-                    SELECT ci.driver_id, MAX(ci.driver_name) driver_name,
-                        SUM(ci.net_before_group-ci.bank_fee) pending_net
-                    FROM closing_items ci
-                    WHERE ci.closing_id=? AND UPPER(TRIM(COALESCE(ci.iban,''))) IN ('', '-', 'NAN', 'NONE', 'NULL', 'SEM IBAN')
-                    GROUP BY ci.driver_id
-                    HAVING SUM(ci.net_before_group-ci.bank_fee)>0
-                )
-                SELECT d.*, p.pending_net
-                FROM pending p JOIN drivers d ON d.id=p.driver_id
-                WHERE 1=1 {search_sql}
-                ORDER BY d.name LIMIT 500""", params).fetchall()
-            closing_missing = len(rows) if not q else con.execute("""SELECT COUNT(*) FROM (
-                    SELECT driver_id
-                    FROM closing_items
-                    WHERE closing_id=? AND UPPER(TRIM(COALESCE(iban,''))) IN ('', '-', 'NAN', 'NONE', 'NULL', 'SEM IBAN')
-                    GROUP BY driver_id
-                    HAVING SUM(net_before_group-bank_fee)>0
-                )""", (last["id"],)).fetchone()[0]
-        total_missing = con.execute("SELECT COUNT(*) FROM drivers WHERE UPPER(TRIM(COALESCE(iban,''))) IN ('', '-', 'NAN', 'NONE', 'NULL', 'SEM IBAN') ").fetchone()[0]
+            closing_missing = con.execute(f"""SELECT COUNT(*) FROM (
+                SELECT driver_id
+                FROM closing_items
+                WHERE closing_id=? AND UPPER(TRIM(COALESCE(iban,''))) IN {missing_values}
+                GROUP BY driver_id
+                HAVING SUM(net_before_group-bank_fee)>0
+            )""", (last["id"],)).fetchone()[0]
     return render_template("missing_iban.html", rows=rows, q=q, total_missing=total_missing, closing_missing=closing_missing)
 
 
@@ -1255,8 +1264,8 @@ def save_missing_iban(driver_id: int):
         now = datetime.now().isoformat(timespec="seconds")
         con.execute(f"UPDATE drivers SET iban=?,bank_color=?,partner=?,partner_commission=?,updated_at=? WHERE id IN ({placeholders})",
                     [iban, bank_color, partner, partner_commission, now, *related_ids])
-        closings = con.execute(f"SELECT DISTINCT closing_id FROM closing_items WHERE driver_id IN ({placeholders}) AND UPPER(TRIM(COALESCE(iban,''))) IN ('', '-', 'NAN', 'NONE', 'NULL', 'SEM IBAN')", related_ids).fetchall()
-        con.execute(f"UPDATE closing_items SET iban=?,bank_color=? WHERE driver_id IN ({placeholders}) AND UPPER(TRIM(COALESCE(iban,''))) IN ('', '-', 'NAN', 'NONE', 'NULL', 'SEM IBAN')",
+        closings = con.execute(f"SELECT DISTINCT closing_id FROM closing_items WHERE driver_id IN ({placeholders}) AND UPPER(TRIM(COALESCE(iban,''))) IN ('', '-', '0', '0.0', 'NAN', 'NONE', 'NULL', 'N/A', 'NA', 'SEM IBAN')", related_ids).fetchall()
+        con.execute(f"UPDATE closing_items SET iban=?,bank_color=? WHERE driver_id IN ({placeholders}) AND UPPER(TRIM(COALESCE(iban,''))) IN ('', '-', '0', '0.0', 'NAN', 'NONE', 'NULL', 'N/A', 'NA', 'SEM IBAN')",
                     [iban, bank_color, *related_ids])
     for row in closings:
         refresh_closing_payment_groups(row["closing_id"])
@@ -1268,7 +1277,7 @@ def save_missing_iban(driver_id: int):
 @login_required
 def missing_iban_excel():
     with db() as con:
-        df = pd.read_sql_query("SELECT name AS Motorista,external_id AS ID,city AS Cidade,company AS Companhia,partner AS Parceiro,partner_commission AS Comissao_Parceiro,bank_color AS Banco,iban AS IBAN FROM drivers WHERE UPPER(TRIM(COALESCE(iban,''))) IN ('', '-', 'NAN', 'NONE', 'NULL', 'SEM IBAN') ORDER BY name", con)
+        df = pd.read_sql_query("SELECT name AS Motorista,external_id AS ID,city AS Cidade,company AS Companhia,partner AS Parceiro,partner_commission AS Comissao_Parceiro,bank_color AS Banco,iban AS IBAN FROM drivers WHERE UPPER(TRIM(COALESCE(iban,''))) IN ('', '-', '0', '0.0', 'NAN', 'NONE', 'NULL', 'N/A', 'NA', 'SEM IBAN') ORDER BY name", con)
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Sem_IBAN")
