@@ -62,7 +62,7 @@ app.jinja_loader.mapping["manager.html"] = r"""{% extends 'base.html' %}{% block
 app.secret_key = os.getenv("SECRET_KEY", "troque-esta-chave-em-producao")
 app.config["MAX_CONTENT_LENGTH"] = 80 * 1024 * 1024
 COMPANY_NAME = os.getenv("COMPANY_NAME", "IRMÃOS PLATAFORMA")
-APP_VERSION = "1.2.6"
+APP_VERSION = "1.2.7"
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
@@ -481,7 +481,7 @@ def ensure_provisional_driver(identifier: Any, display_name: Any, origin: Any) -
             ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (external_id, name, "", str(origin or ""), "", "YELLOW", 0,
              "", 0, 0, "", "", 0, 0, 0,
-             "Cadastro automático: motorista novo encontrado no relatório; complete os dados.", now()),
+             "Cadastro automático: motorista novo encontrado no relatório; complete os dados.", datetime.now().isoformat(timespec="seconds")),
         )
 
 
