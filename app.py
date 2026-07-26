@@ -51,7 +51,7 @@ app.jinja_loader.mapping["manager.html"] = r"""{% extends 'base.html' %}{% block
 app.secret_key = os.getenv("SECRET_KEY", "troque-esta-chave-em-producao")
 app.config["MAX_CONTENT_LENGTH"] = 80 * 1024 * 1024
 COMPANY_NAME = os.getenv("COMPANY_NAME", "Irmãos Fleet")
-APP_VERSION = "1.1.4"
+APP_VERSION = "1.1.5"
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
@@ -830,7 +830,7 @@ def dashboard():
             # Isto impede que linhas repetidas de um fechamento antigo dobrem combustível,
             # descontos, dinheiro em mãos ou outros ajustes.
             r = con.execute("""WITH base AS (
-                    SELECT driver_id, category,
+                    SELECT driver_id, CASE WHEN origins LIKE 'TVDE |%' THEN 'TVDE' ELSE 'DELIVERY' END AS category,
                         MAX(gross) gross, MAX(cash) cash, MAX(commission) commission,
                         MAX(fuel) fuel, MAX(discount) discount,
                         MAX(reimbursement) reimbursement, MAX(immediate) immediate,
@@ -849,8 +849,8 @@ def dashboard():
                 FROM base""", (last["id"],)).fetchone()
             stats = dict(r)
             shares = con.execute("""WITH base AS (
-                    SELECT driver_id, category, MAX(commission) commission
-                    FROM closing_items WHERE closing_id=? GROUP BY driver_id, category
+                    SELECT driver_id, CASE WHEN origins LIKE 'TVDE |%' THEN 'TVDE' ELSE 'DELIVERY' END AS category, MAX(commission) commission
+                    FROM closing_items WHERE closing_id=? GROUP BY driver_id, CASE WHEN origins LIKE 'TVDE |%' THEN 'TVDE' ELSE 'DELIVERY' END
                 )
                 SELECT
                     COALESCE(SUM(base.commission * CASE
@@ -1210,13 +1210,13 @@ def manager_report():
             return render_template("manager.html", closing=None, stats={}, partners=[], negatives=[], missing=[])
         cid = closing["id"]
         raw = con.execute("""WITH base AS (
-                SELECT driver_id, category, MAX(origins) origins,
+                SELECT driver_id, CASE WHEN origins LIKE 'TVDE |%' THEN 'TVDE' ELSE 'DELIVERY' END AS category, MAX(origins) origins,
                     MAX(gross) gross, MAX(cash) cash, MAX(commission) commission,
                     MAX(fuel) fuel, MAX(discount) discount,
                     MAX(reimbursement) reimbursement, MAX(immediate) immediate,
                     MAX(net_before_group) net_before_group, MAX(bank_fee) bank_fee,
                     MAX(iban) iban
-                FROM closing_items WHERE closing_id=? GROUP BY driver_id, category
+                FROM closing_items WHERE closing_id=? GROUP BY driver_id, CASE WHEN origins LIKE 'TVDE |%' THEN 'TVDE' ELSE 'DELIVERY' END
             )
             SELECT COALESCE(SUM(gross),0) gross, COALESCE(SUM(net_before_group-bank_fee),0) net,
                 COALESCE(SUM(fuel),0) fuel, COALESCE(SUM(discount),0) discount,
@@ -1229,7 +1229,7 @@ def manager_report():
         stats=dict(raw)
         commissions = con.execute("""WITH base AS (
                 SELECT driver_id, category, MAX(commission) commission
-                FROM closing_items WHERE closing_id=? GROUP BY driver_id, category
+                FROM closing_items WHERE closing_id=? GROUP BY driver_id, CASE WHEN origins LIKE 'TVDE |%' THEN 'TVDE' ELSE 'DELIVERY' END
             )
             SELECT
                 COALESCE(SUM(base.commission * CASE WHEN COALESCE(d.commission_owner,0)>1
