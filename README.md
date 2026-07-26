@@ -1,43 +1,23 @@
-# Irmãos Fleet - Painel de Gestão 1.1.0
+# Irmãos Fleet 1.1.7 — Estabilização
 
-Atualização financeira para GitHub e Render.
+Correções desta versão:
 
-## Correções desta versão
+- Reembolso Uber TVDE lido somente das quatro colunas configuradas em `Arquivos_Pgto`.
+- Removida a identificação automática por palavras como “Pago a si” e “Saldo”, que podia tratar o valor bruto como reembolso.
+- Área do Gestor corrigida: removida a consulta à coluna inexistente `category`.
+- Dashboard e Área do Gestor passam a somar diretamente os valores gravados no fechamento.
+- Tema noturno aplicado ao painel.
+- Logo da Irmãos Fleet no menu, login e ícone da página.
+- Combustível discriminado por ficheiro PRIO e total do fechamento preservado.
 
-- Dinheiro em mãos aplicado somente à Uber Eats.
-- Dinheiro em mãos entra na base da comissão e é abatido integralmente no pagamento final.
-- Saldos iguais ou inferiores a zero continuam fora do XML e aparecem no relatório de negativos.
-- Pagamentos separados em dois grupos:
-  - TVDE: Uber TVDE + Bolt TVDE.
-  - Delivery: Uber Eats + Bolt Food.
-- Consolidação por IBAN feita dentro de cada grupo.
-- Taxa de € 1,25 aplicada uma vez por IBAN em cada grupo de pagamento.
-- XMLs divididos em lotes de até € 50.000.
-- Download em ZIP com nomes `PAGAMENTO_TVDE_01.xml` e `PAGAMENTO_DELIVERY_01.xml`.
+## Teste após atualizar
 
-## Publicação
+1. No GitHub, substitua os ficheiros pela versão deste ZIP.
+2. Aguarde o deploy do Render.
+3. Em **Importações**, limpe a semana anterior.
+4. Importe novamente os relatórios e os ficheiros PRIO.
+5. Processe um novo fechamento.
+6. Confira primeiro a coluna `Reembolso` no Excel do novo fechamento.
+7. Depois confira Dashboard e Área do Gestor.
 
-Substitua os ficheiros do repositório pelos desta pasta e no Render use:
-
-`Manual Deploy` → `Clear build cache & deploy`
-
-Depois limpe a semana importada, importe novamente os relatórios e gere um novo fechamento.
-
-## Versão 1.0.10 — Sem IBAN
-- Nova opção **Sem IBAN** no menu.
-- Lista de motoristas sem IBAN com pesquisa.
-- Edição rápida de IBAN, banco, parceiro e comissão do parceiro.
-- Botão **Salvar e recalcular** atualiza o cadastro e os fechamentos já processados.
-- Recalcula somente a consolidação por IBAN e a taxa bancária, sem mudar a lógica financeira.
-- Exportação Excel geral e abas separadas por parceiro.
-
-## Versão 1.1.2
-- Corrige duplicação de combustível, descontos e imediata quando o mesmo motorista possui TVDE e Delivery.
-- Comissão da empresa e dos parceiros passa a ser somada uma única vez por motorista ativo.
-- Totais da Dashboard e Área do Gestor revisados.
-
-
-## Versão 1.1.4
-- Corrige os indicadores da Dashboard e Área do Gestor.
-- Comissão da empresa e do parceiro agora é a comissão calculada multiplicada pela participação de cada um no banco de dados.
-- Totais são deduplicados por motorista e categoria para não dobrar combustível, descontos e dinheiro em mãos.
+Um fechamento já criado com o reembolso errado não é corrigido automaticamente.
