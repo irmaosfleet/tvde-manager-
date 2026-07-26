@@ -62,7 +62,7 @@ app.jinja_loader.mapping["manager.html"] = r"""{% extends 'base.html' %}{% block
 app.secret_key = os.getenv("SECRET_KEY", "troque-esta-chave-em-producao")
 app.config["MAX_CONTENT_LENGTH"] = 80 * 1024 * 1024
 COMPANY_NAME = os.getenv("COMPANY_NAME", "IRMÃOS PLATAFORMA")
-APP_VERSION = "1.2.7"
+APP_VERSION = "1.2.8"
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
@@ -551,12 +551,46 @@ def process_report_file(path: Path, import_id: int) -> tuple[int, str]:
         count += 1
     if not rows and len(df.index) == 0:
         return 0, "Ficheiro válido, mas sem linhas de pagamento."
+    # Grava os ganhos e cria motoristas provisórios em uma única transação.
+    # A versão anterior abria uma nova ligação ao SQLite para cada linha, o que
+    # tornava a importação de dezenas de ficheiros muito lenta e podia provocar
+    # timeout/erro 500 no Render.
     with db() as con:
-        con.executemany("INSERT INTO raw_earnings(import_id,filename,origin_ref,identifier,display_name,gross,cash,reimbursement) VALUES(?,?,?,?,?,?,?,?)", rows)
-    # Motoristas novos passam a aparecer imediatamente em Sem IBAN, mesmo
-    # antes de existirem no ficheiro Banco_de_Dados.
-    for raw in rows:
-        ensure_provisional_driver(raw[3], raw[4], raw[2])
+        con.executemany(
+            "INSERT INTO raw_earnings(import_id,filename,origin_ref,identifier,display_name,gross,cash,reimbursement) VALUES(?,?,?,?,?,?,?,?)",
+            rows,
+        )
+
+        existing_keys = {
+            clean_identifier(r["external_id"])
+            for r in con.execute("SELECT external_id FROM drivers").fetchall()
+            if clean_identifier(r["external_id"])
+        }
+        provisional = []
+        seen = set()
+        created_at = datetime.now().isoformat(timespec="seconds")
+        for raw in rows:
+            external_id = str(raw[3] or "").strip()
+            clean_ext = clean_identifier(external_id)
+            if not clean_ext or clean_ext in existing_keys or clean_ext in seen:
+                continue
+            seen.add(clean_ext)
+            display_name = str(raw[4] or "").strip() or external_id
+            provisional.append((
+                external_id, display_name, "", str(raw[2] or ""), "", "YELLOW", 0,
+                "", 0, 0, "", "", 0, 0, 0,
+                "Cadastro automático: motorista novo encontrado no relatório; complete os dados.",
+                created_at,
+            ))
+        if provisional:
+            con.executemany(
+                """INSERT INTO drivers(
+                    external_id,name,city,company,iban,bank_color,commission_owner,
+                    partner,partner_commission,percentage,fuel_card,rental_label,
+                    discount,reimbursement,immediate,observation,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                provisional,
+            )
     reimbursement_total = sum(money(r[7]) for r in rows)
     if "TVDE" in norm(origin):
         return count, f"{origin}: {count} linhas · reembolsos € {reimbursement_total:.2f}"
