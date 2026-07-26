@@ -62,7 +62,7 @@ app.jinja_loader.mapping["manager.html"] = r"""{% extends 'base.html' %}{% block
 app.secret_key = os.getenv("SECRET_KEY", "troque-esta-chave-em-producao")
 app.config["MAX_CONTENT_LENGTH"] = 80 * 1024 * 1024
 COMPANY_NAME = os.getenv("COMPANY_NAME", "IRMÃOS PLATAFORMA")
-APP_VERSION = "1.2.9"
+APP_VERSION = "1.3.0"
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
@@ -1042,16 +1042,27 @@ def dashboard():
             # A Dashboard não recalcula dinheiro em mãos, descontos, combustível
             # ou reembolsos. Ela lê diretamente as mesmas linhas utilizadas no
             # relatório geral do fechamento, garantindo totais idênticos.
-            r = con.execute("""SELECT
-                    COALESCE(SUM(CASE WHEN gross>0 THEN gross ELSE 0 END),0) gross,
-                    COALESCE(SUM(fuel),0) fuel,
-                    COALESCE(SUM(discount),0) discount,
-                    COALESCE(SUM(reimbursement),0) reimbursement,
-                    COALESCE(SUM(cash),0) cash,
-                    COALESCE(SUM(net_before_group-bank_fee),0) net,
-                    COUNT(DISTINCT CASE WHEN TRIM(COALESCE(iban,''))<>'' THEN iban END) payments,
-                    COUNT(DISTINCT CASE WHEN TRIM(COALESCE(iban,''))='' AND net_before_group>0 THEN driver_id END) missing_iban
-                FROM closing_items WHERE closing_id=?""", (last["id"],)).fetchone()
+            r = con.execute("""WITH driver_totals AS (
+                    SELECT driver_id,
+                           MAX(TRIM(COALESCE(iban,''))) AS iban,
+                           SUM(COALESCE(net_before_group,0)-COALESCE(bank_fee,0)) AS driver_net
+                    FROM closing_items
+                    WHERE closing_id=?
+                    GROUP BY driver_id
+                ), item_totals AS (
+                    SELECT
+                        COALESCE(SUM(CASE WHEN gross>0 THEN gross ELSE 0 END),0) gross,
+                        COALESCE(SUM(fuel),0) fuel,
+                        COALESCE(SUM(discount),0) discount,
+                        COALESCE(SUM(reimbursement),0) reimbursement,
+                        COALESCE(SUM(cash),0) cash
+                    FROM closing_items WHERE closing_id=?
+                )
+                SELECT item_totals.*,
+                       COALESCE((SELECT SUM(CASE WHEN driver_net>0 THEN driver_net ELSE 0 END) FROM driver_totals),0) net,
+                       COALESCE((SELECT COUNT(*) FROM driver_totals WHERE driver_net>0 AND iban<>''),0) payments,
+                       COALESCE((SELECT COUNT(*) FROM driver_totals WHERE driver_net>0 AND iban=''),0) missing_iban
+                FROM item_totals""", (last["id"], last["id"])).fetchone()
             stats = dict(r)
             shares = con.execute("""WITH base AS (
                     SELECT driver_id, CASE WHEN origins LIKE 'TVDE |%' THEN 'TVDE' ELSE 'DELIVERY' END AS category, MAX(commission) commission
@@ -1522,12 +1533,12 @@ def manager_report():
             items = con.execute("""SELECT ci.*, COALESCE(d.partner,'') partner,
                 COALESCE(d.commission_owner,0) owner_share, COALESCE(d.partner_commission,0) partner_share
                 FROM closing_items ci LEFT JOIN drivers d ON d.id=ci.driver_id WHERE ci.closing_id=?""", (cid,)).fetchall()
-            stats={"gross":0.0,"net":0.0,"fuel":0.0,"discount":0.0,"reimbursement":0.0,"cash":0.0,"negatives":0,"missing_iban":0,"tvde":0.0,"delivery":0.0,"commission":0.0,"partner_commission":0.0}
+            stats={"gross":0.0,"net":0.0,"fuel":0.0,"discount":0.0,"reimbursement":0.0,"cash":0.0,"negatives":0,"missing_iban":0,"tvde":0.0,"delivery":0.0,"commission":0.0,"partner_commission":0.0,"negative_total":0.0}
             per_driver={}
             partners_map={}
             for r in items:
                 positive_gross = max(float(r["gross"] or 0), 0.0)
-                stats["gross"] += positive_gross; stats["net"] += float((r["net_before_group"] or 0)-(r["bank_fee"] or 0))
+                stats["gross"] += positive_gross
                 stats["fuel"] += float(r["fuel"] or 0); stats["discount"] += float(r["discount"] or 0); stats["reimbursement"] += float(r["reimbursement"] or 0); stats["cash"] += float(r["cash"] or 0)
                 if str(r["origins"] or '').startswith('TVDE |'): stats["tvde"] += positive_gross
                 else: stats["delivery"] += positive_gross
@@ -1535,16 +1546,31 @@ def manager_report():
                 pshare=float(r["partner_share"] or 0); pshare=pshare/100 if pshare>1 else pshare
                 stats["commission"] += float(r["commission"] or 0)*owner
                 stats["partner_commission"] += float(r["commission"] or 0)*pshare
-                did=r["driver_id"]; d=per_driver.setdefault(did,{"driver_name":r["driver_name"],"origins":[],"partner":r["partner"],"net":0.0,"iban":r["iban"] or ''})
-                d["origins"].append(r["origins"] or ''); d["net"] += float((r["net_before_group"] or 0)-(r["bank_fee"] or 0))
-                pn=(r["partner"] or 'SEM PARCEIRO').strip() or 'SEM PARCEIRO'; pm=partners_map.setdefault(pn,{"partner":pn,"ids":set(),"gross":0.0,"partner_commission":0.0,"net":0.0})
-                pm["ids"].add(did); pm["gross"] += positive_gross; pm["partner_commission"] += float(r["commission"] or 0)*pshare; pm["net"] += float((r["net_before_group"] or 0)-(r["bank_fee"] or 0))
+                did=r["driver_id"]; d=per_driver.setdefault(did,{"driver_name":r["driver_name"],"origins":[],"partner":r["partner"],"net":0.0,"iban":r["iban"] or '',"gross":0.0,"partner_commission":0.0})
+                d["origins"].append(r["origins"] or '')
+                d["net"] += float((r["net_before_group"] or 0)-(r["bank_fee"] or 0))
+                d["gross"] += positive_gross
+                d["partner_commission"] += float(r["commission"] or 0)*pshare
             negatives=[]; missing=[]
-            for d in per_driver.values():
+            for did,d in per_driver.items():
                 row={"driver_name":d["driver_name"],"origins":" / ".join(dict.fromkeys(d["origins"])),"partner":d["partner"],"net":d["net"]}
-                if d["net"]<0: negatives.append(row)
-                if not str(d["iban"]).strip() and d["net"]>0: missing.append(row)
+                if d["net"]<0:
+                    negatives.append(row)
+                else:
+                    stats["net"] += d["net"]
+                if not str(d["iban"]).strip() and d["net"]>0:
+                    missing.append(row)
+                # A tabela de parceiros representa apenas pagamentos positivos.
+                # Saldos negativos ficam exclusivamente no relatório de negativos.
+                if d["net"]>0 or d["gross"]>0:
+                    pn=(d["partner"] or 'SEM PARCEIRO').strip() or 'SEM PARCEIRO'
+                    pm=partners_map.setdefault(pn,{"partner":pn,"ids":set(),"gross":0.0,"partner_commission":0.0,"net":0.0})
+                    pm["ids"].add(did)
+                    pm["gross"] += d["gross"]
+                    pm["partner_commission"] += d["partner_commission"]
+                    pm["net"] += max(d["net"],0.0)
             stats["negatives"]=len(negatives); stats["missing_iban"]=len(missing)
+            stats["negative_total"] = abs(sum(d["net"] for d in per_driver.values() if d["net"]<0))
             partners=[]
             for pm in partners_map.values():
                 partners.append({"partner":pm["partner"],"drivers":len(pm["ids"]),"gross":pm["gross"],"partner_commission":pm["partner_commission"],"net":pm["net"]})
